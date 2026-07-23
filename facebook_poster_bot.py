@@ -148,7 +148,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="50",
+    price="50000000",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         """
@@ -410,6 +410,39 @@ def upload_photos(wait: WebDriverWait, photo_paths: list) -> bool:
         return False
 
 
+def click_through_to_publish(driver: webdriver.Chrome, wait: WebDriverWait, max_next_clicks: int = 3) -> None:
+    """Clicks 'Next' as many times as the form requires (Facebook's
+    Marketplace flow sometimes has one review step, sometimes more),
+    waiting properly for each button instead of guessing with a fixed
+    sleep. Stops clicking Next once no more Next button appears, then
+    waits for and clicks Publish."""
+    for i in range(max_next_clicks):
+        try:
+            next_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Next')]"))
+            )
+        except TimeoutException:
+            log(f"  [info] No more 'Next' button found after {i} click(s) — assuming final review page.")
+            break
+        click_with_fallback(driver, next_button)
+        log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
+        time.sleep(2)
+
+    try:
+        publish_button = WebDriverWait(driver, 20).until(
+            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Publish')]"))
+        )
+        click_with_fallback(driver, publish_button)
+        log("  [ok] Clicked 'Publish'")
+    except TimeoutException:
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
+        raise TimeoutException(
+            "Could not find 'Publish' button after clicking through the form. "
+            "Facebook's form may have shown a validation error or an unexpected "
+            "extra step — check screenshots/Submission_page.png."
+        )
+
+
 def delete_previous_listing_if_present(driver: webdriver.Chrome) -> None:
     """Deletes the previous 'For Sale' listing so the hourly re-post doesn't
     pile up duplicates. No-ops if there's nothing to delete."""
@@ -517,11 +550,7 @@ def main() -> int:
         results["photos"] = upload_photos(wait, cfg.photo_paths)
 
         log("Step 8: Submission")
-        next_button = driver.find_element(by="xpath", value="//span[contains(text(),'Next')]")
-        next_button.click()
-        time.sleep(2)
-        publish_button = driver.find_element(by="xpath", value="//span[contains(text(),'Publish')]")
-        publish_button.click()
+        click_through_to_publish(driver, wait)
 
         log("=" * 60)
         log("SUMMARY")
