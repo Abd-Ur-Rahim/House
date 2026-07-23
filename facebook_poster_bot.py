@@ -218,7 +218,7 @@ def build_driver(cfg: ListingConfig):
                 uc=True,                  # Undetected mode (bypasses Facebook bot checks)
                 headless=True,            # Runs invisibly in GitHub Actions
                 user_data_dir=cfg.fb_profile,
-                proxy=proxy_string        # Automatically handles User:Pass!
+                proxy=proxy_string,      # Automatically handles User:Pass!
                 block_images=True 
                )
 
@@ -270,6 +270,7 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
     try:
         el = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
         el.click()
+        time.sleep(random.randint(2,10))
         set_text_via_js(driver, el, value)
         log(f"  [ok] {field_name} filled")
         return True
@@ -286,6 +287,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
     try:
         el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
         el.click()
+        time.sleep(random.randint(2,10))
         el.clear()
         for char in value:
             el.send_keys(char)
@@ -293,6 +295,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
 
         first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
         first_suggestion.click()
+        time.sleep(random.randint(1,10))
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
     except TimeoutException:
@@ -320,6 +323,7 @@ def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) 
                 wait.until(
                     EC.element_to_be_clickable((By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']"))
                 ).click()
+                time.sleep(random.randint(2,10))
                 log(f"  [ok] Listing type set to '{label}'")
                 return True
 
@@ -341,6 +345,7 @@ def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) 
 def click_with_fallback(driver, element):
     try:
         element.click()
+        time.sleep(random.randint(2,10))
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
 
