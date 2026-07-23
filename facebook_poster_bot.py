@@ -412,10 +412,10 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
         )
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{state}_page.png"))
         click_with_fallback(driver, publish_or_Update_button)
         log("  [ok] Clicked 'Publish'")
     except TimeoutException:
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
         raise TimeoutException(
             f"Could not find '{state}' button after clicking through the form. "
             "Facebook's form may have shown a validation error or an unexpected "
@@ -428,7 +428,7 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     pile up duplicates. No-ops if there's nothing to edit."""
     edit_results={}
     nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page.png"))
     if nothing:
         log("No previous listing found — nothing to edit.")
         return True
@@ -453,7 +453,6 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         description="'Edit listing' menu item",
     )
     log("Step 1: Edit description")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
     textarea = driver.find_element(By.XPATH, "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea")
     textarea.clear()
     time.sleep(1)
@@ -522,7 +521,7 @@ def main() -> int:
             log(f"❌ Target page return status {status_code} (Expected 200). Requesting profile rebuild...")
             driver.quit()
             sys.exit(99)
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_page.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
 
 
         try:
