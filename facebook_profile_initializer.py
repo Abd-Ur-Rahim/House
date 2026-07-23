@@ -104,6 +104,9 @@ def run_script():
                 print("\n⚠️ Profile authentication complete framework exited. Verification missed.")
 
         except Exception as error_msg:
+            timestamp = int(time.time())
+            error_img_path = f"screenshots/failure_initializer_{timestamp}.png"
+            sb.driver.save_screenshot(error_img_path)
             print(f"\n❌ Execution Exception triggered: {error_msg}")
         finally:
             print("💾 Cleaning runtime buffers and saving profile state metadata...")
