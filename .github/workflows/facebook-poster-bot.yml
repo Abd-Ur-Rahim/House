@@ -4,7 +4,7 @@ on:
   schedule:
     # ── Peak windows ──
     - cron: "0 6 * * 1-5"     # Weekday lunch window opens 12:00 SLT, Mon–Fri
-    - cron: "5 13 * * 1-4"    # Weekday evening window opens 19:05 SLT, Mon–Thu (offset 5m to avoid colliding with the 13:00 daily anchor below)
+    - cron: "5 13 * * 1-4"    # Weekday evening window opens 19:05 SLT, Mon–Thu (offset 5m to avoid colliding with 13:00 anchor)
     - cron: "0 2 * * 6"       # Saturday morning window opens 08:00 SLT, Sat
 
     # ── General everyday coverage — 4x/day, every day, ~6h apart anchors ──
@@ -35,13 +35,12 @@ jobs:
           case "${{ github.event.schedule }}" in
             "0 6 * * 1-5")
               WINDOW_MINUTES=119 ;;   # lunch peak: 12:00–13:59 SLT
-            "0 13 * * 1-4")
-              WINDOW_MINUTES=179 ;;   # evening peak: 19:00–21:59 SLT
+            "5 13 * * 1-4")
+              WINDOW_MINUTES=179 ;;   # evening peak: 19:05–21:59 SLT
             "0 2 * * 6")
               WINDOW_MINUTES=119 ;;   # Saturday morning peak: 08:00–09:59 SLT
-            "0 1 * * *"|"0 7 * * *"|"0 13 * * *"|"0 19 * * *")
+            "0 1 * * *"|"0 9 * * *"|"0 14 * * *")
               WINDOW_MINUTES=119 ;;   # general everyday anchors: ~2h jitter each
-              ;;
             *)
               WINDOW_MINUTES=0 ;;
           esac
@@ -86,6 +85,7 @@ jobs:
       # ── FIRST ATTEMPT ──
       - name: Create screenshots directory
         run: mkdir -p screenshots
+
       - name: Run Facebook Poster Bot
         id: bot
         continue-on-error: true
@@ -132,8 +132,6 @@ jobs:
         run: python3 facebook_poster_bot.py
 
       # ── ARTIFACTS & CACHE ──
-      - name: Create screenshots directory
-        run: mkdir -p screenshots
       - name: Upload screenshots as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,70 +148,67 @@ jobs:
           path: profiles
           key: browser-profiles-${{ github.run_id }}
 
+      # ── TELEGRAM SCREENSHOTS ──
       - name: Send all screenshots to Telegram
-              if: always()
-              run: |
-                BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
-                CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
-                SCREENSHOT_DIR="screenshots"
+        if: always()
+        run: |
+          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
+          SCREENSHOT_DIR="screenshots"
 
-                # Create directory if missing so find doesn't fail
-                mkdir -p "$SCREENSHOT_DIR"
+          mkdir -p "$SCREENSHOT_DIR"
 
-                # Collect all png/jpg/jpeg files into an array safely
-                FILES=()
-                while IFS= read -r -d '' f; do
-                  FILES+=("$f")
-                done < <(find "$SCREENSHOT_DIR" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 | sort -z)
+          FILES=()
+          while IFS= read -r -d '' f; do
+            FILES+=("$f")
+          done < <(find "$SCREENSHOT_DIR" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 | sort -z)
 
-                TOTAL=${#FILES[@]}
-                echo "Found $TOTAL screenshot(s)."
+          TOTAL=${#FILES[@]}
+          echo "Found $TOTAL screenshot(s)."
 
-                if [ "$TOTAL" -eq 0 ]; then
-                  echo "No screenshot images found — skipping Telegram upload."
-                  exit 0
-                fi
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "No screenshot images found — skipping Telegram upload."
+            exit 0
+          fi
 
-                if [ "$TOTAL" -eq 1 ]; then
-                  # sendMediaGroup requires 2+ items, so a single file goes via sendPhoto
-                  curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                    -F "chat_id=${CHAT_ID}" \
-                    -F "photo=@${FILES[0]}" \
-                    -F "caption=📸 $(basename "${FILES[0]}") — run ${{ github.run_id }}" > /dev/null
-                  echo "Sent 1 screenshot via sendPhoto."
-                  exit 0
-                fi
+          if [ "$TOTAL" -eq 1 ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "photo=@${FILES[0]}" \
+              -F "caption=📸 $(basename "${FILES[0]}") — run ${{ github.run_id }}" > /dev/null
+            echo "Sent 1 screenshot via sendPhoto."
+            exit 0
+          fi
 
-                # Batch into groups of up to 10 (Telegram's sendMediaGroup limit)
-                BATCH_SIZE=10
-                i=0
-                while [ $i -lt "$TOTAL" ]; do
-                  BATCH=("${FILES[@]:i:BATCH_SIZE}")
-                  MEDIA_JSON="["
-                  CURL_ARGS=()
-                  for idx in "${!BATCH[@]}"; do
-                    FNAME=$(basename "${BATCH[$idx]}")
-                    ATTACH_NAME="file${idx}"
-                    if [ "$idx" -gt 0 ]; then MEDIA_JSON+=","; fi
-                    if [ "$idx" -eq 0 ] && [ "$i" -eq 0 ]; then
-                      CAPTION="📸 Screenshots — run ${{ github.run_id }} (${TOTAL} total)"
-                      MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\",\"caption\":\"${CAPTION}\"}"
-                    else
-                      MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\"}"
-                    fi
-                    CURL_ARGS+=(-F "${ATTACH_NAME}=@${BATCH[$idx]}")
-                  done
-                  MEDIA_JSON+="]"
+          BATCH_SIZE=10
+          i=0
+          while [ $i -lt "$TOTAL" ]; do
+            BATCH=("${FILES[@]:i:BATCH_SIZE}")
+            MEDIA_JSON="["
+            CURL_ARGS=()
+            for idx in "${!BATCH[@]}"; do
+              ATTACH_NAME="file${idx}"
+              if [ "$idx" -gt 0 ]; then MEDIA_JSON+=","; fi
+              if [ "$idx" -eq 0 ] && [ "$i" -eq 0 ]; then
+                CAPTION="📸 Screenshots — run ${{ github.run_id }} (${TOTAL} total)"
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\",\"caption\":\"${CAPTION}\"}"
+              else
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\"}"
+              fi
+              CURL_ARGS+=(-F "${ATTACH_NAME}=@${BATCH[$idx]}")
+            done
+            MEDIA_JSON+="]"
 
-                  curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup" \
-                    -F "chat_id=${CHAT_ID}" \
-                    -F "media=${MEDIA_JSON}" \
-                    "${CURL_ARGS[@]}" > /dev/null
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "media=${MEDIA_JSON}" \
+              "${CURL_ARGS[@]}" > /dev/null
 
-                  echo "Sent batch of ${#BATCH[@]} screenshot(s)."
-                  i=$((i + BATCH_SIZE))
-                done
-          # ── FINAL TELEGRAM NOTIFICATION ──
+            echo "Sent batch of ${#BATCH[@]} screenshot(s)."
+            i=$((i + BATCH_SIZE))
+          done
+
+      # ── FINAL TELEGRAM NOTIFICATION ──
       - name: Send Final Telegram Status
         if: always()
         run: |
