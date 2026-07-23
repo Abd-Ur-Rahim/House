@@ -27,15 +27,19 @@ jobs:
           restore-keys: |
             browser-profiles-
 
-      # ONE-TIME BOOTSTRAP: only runs if the cache above found nothing AND
-      # a profiles.zip is sitting in the repo (from your Codespace).
-      # Delete this step (and profiles.zip) once you've confirmed the cache
-      # is populated — it should only ever need to fire once.
-      - name: Seed profiles from committed zip (first run only)
-        if: steps.cache-restore.outputs.cache-hit != 'true'
+      # SEED FALLBACK: only runs if nothing usable was restored from cache
+      # above. This checks the actual folder on disk rather than the
+      # cache-hit output, because cache-hit is only true on an EXACT key
+      # match — and our key intentionally includes the run ID so a fresh
+      # cache entry is saved every run. The restore step above still
+      # correctly pulls the most recent prior session via restore-keys
+      # prefix matching; that just doesn't count as an "exact hit."
+      - name: Seed profiles from committed zip (only if cache had nothing)
         run: |
-          if [ -f profiles.zip ]; then
-            echo "No cache found — seeding from profiles.zip"
+          if [ -d "profiles/facebook_stable_session" ]; then
+            echo "Restored an existing session from cache — skipping seed."
+          elif [ -f profiles.zip ]; then
+            echo "No cached session found — seeding from profiles.zip"
             unzip -o profiles.zip -d .
           else
             echo "No cache and no profiles.zip found — profiles/ will be empty this run."
