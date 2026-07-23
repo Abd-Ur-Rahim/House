@@ -51,20 +51,42 @@ def run_script():
             
             email_selectors = ["input[name='email']", "#email", "input[type='text']", "input[placeholder*='Email']"]
             password_selectors = ["input[name='pass']", "#pass", "input[type='password']", "input[placeholder*='Password']"]
+            is_standard_login = any(sb.is_element_visible(sel) for sel in email_selectors)
+
+            if not is_standard_login:
+                print("🔄 Saved profile screen detected. Attempting to click 'Continue'...")
+                try:
+                    # Use XPath to find and click any element containing the text "Continue"
+                    sb.click('//*[contains(text(), "Continue") or contains(text(), "Log in as")]')
+                except Exception:
+                    # Fallback: Click the first clickable div that looks like the profile card
+                    sb.click('div[role="button"]')
+                
+                time.sleep(4)
+                
+                # Sometimes Facebook asks for the password again after clicking the profile card
+                if any(sb.is_element_visible(sel) for sel in password_selectors):
+                    print("⌨️ Password requested for saved profile. Injecting...")
+                    human_type(sb, password_selectors, FB_PASSWORD)
+                    time.sleep(random.uniform(1.2, 2.5))
+                    active_pass_field = next(sel for sel in password_selectors if sb.is_element_visible(sel))
+                    sb.press_keys(active_pass_field, "\n")
             
-            print("⌨️ Injecting email identity safely...")
-            human_type(sb, email_selectors, FB_EMAIL)
-            time.sleep(random.uniform(1.0, 2.2))
-            
-            print("⌨️ Injecting secure password array safely...")
-            human_type(sb, password_selectors, FB_PASSWORD)
-            time.sleep(random.uniform(1.2, 2.5))
-            
-            print("👆 Transmitting native keyboard submit signal...")
-            active_pass_field = next(sel for sel in password_selectors if sb.is_element_visible(sel))
-            sb.press_keys(active_pass_field, "\n")
-            
-            print("\n⏳ Monitoring authentication changes...")
+            else:
+                # --- ORIGINAL FRESH LOGIN LOGIC ---
+                print("⌨️ Standard login form detected. Injecting email identity...")
+                human_type(sb, email_selectors, FB_EMAIL)
+                time.sleep(random.uniform(1.0, 2.2))
+                
+                print("⌨️ Injecting secure password array safely...")
+                human_type(sb, password_selectors, FB_PASSWORD)
+                time.sleep(random.uniform(1.2, 2.5))
+                
+                print("👆 Transmitting native keyboard submit signal...")
+                active_pass_field = next(sel for sel in password_selectors if sb.is_element_visible(sel))
+                sb.press_keys(active_pass_field, "\n")
+
+            print("\n⏳ Monitoring authentication changes (Awaiting Profile Redirect)...")
             
             logged_in = False
             for attempt in range(60):
