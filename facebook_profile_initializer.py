@@ -3,8 +3,8 @@ import time
 import os
 import random
 
-FB_EMAIL = os.environ.get("FB_EMAIL")
-FB_PASSWORD = os.environ.get("FB_PASSWORD")
+FB_EMAIL = os.environ.get("FB_EMAIL",'rockingrock2003@gmail.com')
+FB_PASSWORD = os.environ.get("FB_PASSWORD",'Abdur@15497')
 
 if not FB_EMAIL or not FB_PASSWORD:
     raise SystemExit(

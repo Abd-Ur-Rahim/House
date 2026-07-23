@@ -505,7 +505,32 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         log("All fields filled successfully edited.")
     log("Previous listing edited.")
 
+def get_current_page_status_code(driver: webdriver.Chrome) -> int:
+    """Retrieves the HTTP status code of the current page loaded in Selenium."""
+    current_url = driver.current_url
+    log(f"🔍 Checking HTTP status code for current page: {current_url}")
+    
+    try:
+        session = requests.Session()
+        
+        # Copy browser cookies to the requests session so authenticated pages return 200 instead of 302/401
+        for cookie in driver.get_cookies():
+            session.cookies.set(cookie['name'], cookie['value'])
+            
+        # Copy browser User-Agent to avoid bot blocks
+        user_agent = driver.execute_script("return navigator.userAgent;")
+        headers = {"User-Agent": user_agent}
 
+        # Send a HEAD or GET request to fetch the status code
+        response = session.get(current_url, headers=headers, timeout=10)
+        status_code = response.status_code
+        log(f"🌐 HTTP Status Code: {status_code}")
+        return status_code
+
+    except requests.exceptions.RequestException as e:
+        log(f"⚠️ Failed to get HTTP status code: {e}")
+        return 0
+        
 def main() -> int:
     cfg = CONFIG
     log("Launching Chrome with your profile...")
@@ -516,7 +541,15 @@ def main() -> int:
 
     try:
         driver.get("https://www.facebook.com/marketplace/you/selling")
+        status_code = get_current_page_status_code(driver)
+        if status_code == 200:
+            log("✅ Page loaded successfully with status 200 OK.")
+        elif status_code == 404:
+            log("❌ Page not found (404).")
+        else:
+            log(f"⚠️ Unexpected status code received: {status_code}")
         driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_page.png"))
+
 
         try:
             nothing = edit_previous_listing_if_present(driver,wait,cfg)
