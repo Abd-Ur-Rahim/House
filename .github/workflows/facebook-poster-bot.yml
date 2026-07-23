@@ -13,6 +13,9 @@ on:
     - cron: "0 14 * * *"      # ~18:30 SLT
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 concurrency:
   group: facebook-poster-bot
   cancel-in-progress: true
@@ -32,12 +35,13 @@ jobs:
           case "${{ github.event.schedule }}" in
             "0 6 * * 1-5")
               WINDOW_MINUTES=119 ;;   # lunch peak: 12:00–13:59 SLT
-            "5 13 * * 1-4")
-              WINDOW_MINUTES=179 ;;   # evening peak: 19:05–22:04 SLT
+            "0 13 * * 1-4")
+              WINDOW_MINUTES=179 ;;   # evening peak: 19:00–21:59 SLT
             "0 2 * * 6")
               WINDOW_MINUTES=119 ;;   # Saturday morning peak: 08:00–09:59 SLT
             "0 1 * * *"|"0 7 * * *"|"0 13 * * *"|"0 19 * * *")
               WINDOW_MINUTES=119 ;;   # general everyday anchors: ~2h jitter each
+              ;;
             *)
               WINDOW_MINUTES=0 ;;
           esac
@@ -55,13 +59,6 @@ jobs:
           restore-keys: |
             browser-profiles-
 
-      # SEED FALLBACK: only runs if nothing usable was restored from cache
-      # above. This checks the actual folder on disk rather than the
-      # cache-hit output, because cache-hit is only true on an EXACT key
-      # match — and our key intentionally includes the run ID so a fresh
-      # cache entry is saved every run. The restore step above still
-      # correctly pulls the most recent prior session via restore-keys
-      # prefix matching; that just doesn't count as an "exact hit."
       - name: Seed profiles from committed zip (only if cache had nothing)
         run: |
           if [ -d "profiles/facebook_stable_session" ]; then
@@ -86,19 +83,53 @@ jobs:
           python3 -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      # ── FIRST ATTEMPT ──
       - name: Run Facebook Poster Bot
+        id: bot
+        continue-on-error: true
         env:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
-          WHATSAPP_NOTIFY_PHONE: ${{ secrets.WHATSAPP_NOTIFY_PHONE }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 facebook_poster_bot.py
 
-      # Without this, screenshots taken during the run are lost forever
-      # the moment the ephemeral runner shuts down — making failures
-      # impossible to actually diagnose. Download these from the run's
-      # summary page under "Artifacts" after each run.
+      # ── REBUILD ALERT & STEP ──
+      - name: Send Telegram Alert - Rebuilding
+        if: steps.bot.outcome != 'success'
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=Markdown" \
+            -d "text=⚠️ *Facebook Poster Bot:* Non-200 code detected. Rebuilding profile..."
+
+      - name: Rebuild Facebook profile and update seed zip
+        if: steps.bot.outcome != 'success'
+        env:
+          FB_EMAIL: ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+        run: |
+          rm -f profiles.zip
+          python3 facebook_profile_initializer.py
+          cd profiles/facebook_stable_session
+          rm -rf "Default/Code Cache" "Default/Cache" optimization_guide_model_store component_crx_cache WasmTtsEngine || true
+          cd ../..
+          zip -r profiles.zip profiles/facebook_stable_session/
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add profiles.zip
+          git commit -m "Auto-rebuilt trimmed Facebook profile seed [skip ci]" || echo "No changes to commit"
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push
+
+      # ── SECOND ATTEMPT ──
+      - name: Retry Facebook Poster Bot with fresh profile
+        id: bot_retry
+        if: steps.bot.outcome != 'success'
+        env:
+          FB_EMAIL: ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+        run: python3 facebook_poster_bot.py
+
+      # ── ARTIFACTS & CACHE ──
       - name: Upload screenshots as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -114,3 +145,87 @@ jobs:
         with:
           path: profiles
           key: browser-profiles-${{ github.run_id }}
+
+      # ── FINAL TELEGRAM NOTIFICATION ──
+      - name: Send Final Telegram Status
+        if: always()
+        run: |
+          POSTER="${{ steps.bot_retry.outputs.poster_number || steps.bot.outputs.poster_number || 'unknown' }}"
+          TIME="${{ steps.bot_retry.outputs.published_time || steps.bot.outputs.published_time || 'unknown time' }}"
+          STATUS="${{ steps.bot_retry.outputs.status || steps.bot.outputs.status || 'unknown status' }}"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            MSG="✅ *Facebook Poster Bot:* poster-${POSTER} — ${STATUS} at ${TIME}"
+          else
+            MSG="❌ *Facebook Poster Bot:* Execution failed. Last known: poster-${POSTER}, ${STATUS} at ${TIME}"
+          fi
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=Markdown" \
+            -d "text=${MSG}"
+      - name: Send all screenshots to Telegram
+        if: always()
+        run: |
+          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
+          SCREENSHOT_DIR="screenshots"
+
+          if [ ! -d "$SCREENSHOT_DIR" ] || [ -z "$(ls -A $SCREENSHOT_DIR 2>/dev/null)" ]; then
+            echo "No screenshots found — skipping."
+            exit 0
+          fi
+
+          # Collect all png/jpg files into an array
+          FILES=()
+          while IFS= read -r -d '' f; do
+            FILES+=("$f")
+          done < <(find "$SCREENSHOT_DIR" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 | sort -z)
+
+          TOTAL=${#FILES[@]}
+          echo "Found $TOTAL screenshot(s)."
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "No image files found — skipping."
+            exit 0
+          fi
+
+          if [ "$TOTAL" -eq 1 ]; then
+            # sendMediaGroup requires 2+ items, so a single file goes via sendPhoto
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "photo=@${FILES[0]}" \
+              -F "caption=📸 $(basename "${FILES[0]}") — run ${{ github.run_id }}" > /dev/null
+            echo "Sent 1 screenshot via sendPhoto."
+            exit 0
+          fi
+
+          # Batch into groups of up to 10 (Telegram's sendMediaGroup limit)
+          BATCH_SIZE=10
+          i=0
+          while [ $i -lt "$TOTAL" ]; do
+            BATCH=("${FILES[@]:i:BATCH_SIZE}")
+            MEDIA_JSON="["
+            CURL_ARGS=()
+            for idx in "${!BATCH[@]}"; do
+              FNAME=$(basename "${BATCH[$idx]}")
+              ATTACH_NAME="file${idx}"
+              if [ "$idx" -gt 0 ]; then MEDIA_JSON+=","; fi
+              if [ "$idx" -eq 0 ] && [ "$i" -eq 0 ]; then
+                CAPTION="📸 Screenshots — run ${{ github.run_id }} (${TOTAL} total)"
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\",\"caption\":\"${CAPTION}\"}"
+              else
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH_NAME}\"}"
+              fi
+              CURL_ARGS+=(-F "${ATTACH_NAME}=@${BATCH[$idx]}")
+            done
+            MEDIA_JSON+="]"
+
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "media=${MEDIA_JSON}" \
+              "${CURL_ARGS[@]}" > /dev/null
+
+            echo "Sent batch of ${#BATCH[@]} screenshot(s)."
+            i=$((i + BATCH_SIZE))
+          done

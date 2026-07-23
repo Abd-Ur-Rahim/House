@@ -25,9 +25,7 @@ import random
 # Config knobs you can override without touching code (handy for CI secrets)
 # --------------------------------------------------------------------------
 USE_FREE_PROXY = os.environ.get("USE_FREE_PROXY", "false").lower() == "true"
-WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE", "+94759257307")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+# WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_timezone = pytz.timezone("Asia/Colombo")
@@ -72,102 +70,80 @@ def get_free_proxy() -> str:
     except Exception as e:
         log(f"⚠️ Proxy fetch failed: {e}")
     return ""
+def write_github_output(**kwargs) -> None:
+    """Writes key=value pairs to GITHUB_OUTPUT so the workflow step can
+    read them via steps.<id>.outputs.<key>. No-ops locally (outside CI)
+    where GITHUB_OUTPUT isn't set."""
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if not output_path:
+        return
+    with open(output_path, "a", encoding="utf-8") as f:
+        for key, value in kwargs.items():
+            # Flatten to one line — GITHUB_OUTPUT doesn't handle raw newlines safely
+            safe_value = str(value).replace("\n", " ").replace("\r", "")
+            f.write(f"{key}={safe_value}\n")
+# class WhatsappSendMsg:
+#     """Sends a WhatsApp Web notification once the listing has been posted.
+#     Requires a Chrome profile in profiles/whatsapp_stable_session that has
+#     already been logged in once (see whatsapp_profile_initializer.py)."""
 
-class TelegramNotify:
-    """Sends a plain HTTPS notification via the Telegram Bot API — no
-    browser, no login session, no profile directory required."""
+#     def __init__(self, phone_no: str = WHATSAPP_NOTIFY_PHONE, published_time: str = "Error in time", status: str = "published"):
+#         self.published_time = published_time
+#         self.phone_number = phone_no
+#         self.status = status
 
-    def __init__(self, bot_token: str = TELEGRAM_BOT_TOKEN, chat_id: str = TELEGRAM_CHAT_ID,
-                 published_time: str = "Error in time", status: str = "published"):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.published_time = published_time
-        self.status = status
+#     def main(self):
+#         user_data_dir = os.path.join(base_dir, "profiles", "whatsapp_stable_session")
+#         if not os.path.isdir(user_data_dir):
+#             log("⚠️ WhatsApp profile not found — skipping notification.")
+#             return
 
-    def main(self):
-        if not self.bot_token or not self.chat_id:
-            log("⚠️ Telegram bot token/chat id not set — skipping notification.")
-            return
+#         message = f"poster-{photo_number} {self.status} at {self.published_time}"
+#         driver = Driver(
+#             browser="Chrome",
+#             uc=True,
+#             headless2=True,
+#             agent=(
+#                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+#                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+#             ),
+#             user_data_dir=user_data_dir,
+#         )
+#         try:
+#             driver.get("https://web.whatsapp.com")
 
-        message = f"poster-{photo_number} {self.status} at {self.published_time}"
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+#             def ready_or_continue():
+#                 cont_buttons = driver.find_elements(by="xpath", value='//span[contains(text(),"Continue")]')
+#                 if cont_buttons:
+#                     cont_buttons[0].click()
+#                     return False  # keep polling; page needs a moment after the click
+#                 main_pane = driver.find_elements(by="xpath", value='//div[@id="side"]')
+#                 return bool(main_pane)
 
-        try:
-            response = requests.post(
-                url,
-                data={"chat_id": self.chat_id, "text": message},
-                timeout=10,
-            )
-            if response.status_code == 200:
-                log("✅ Telegram notification sent.")
-            else:
-                log(f"⚠️ Telegram notification failed — status {response.status_code}: {response.text}")
-        except Exception as e:
-            log(f"⚠️ Telegram notification failed (non-fatal): {e}")
-class WhatsappSendMsg:
-    """Sends a WhatsApp Web notification once the listing has been posted.
-    Requires a Chrome profile in profiles/whatsapp_stable_session that has
-    already been logged in once (see whatsapp_profile_initializer.py)."""
+#             wait_until(ready_or_continue, timeout=90, poll_interval=2, description="WhatsApp Web to finish loading")
 
-    def __init__(self, phone_no: str = WHATSAPP_NOTIFY_PHONE, published_time: str = "Error in time", status: str = "published"):
-        self.published_time = published_time
-        self.phone_number = phone_no
-        self.status = status
+#             driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page1.png"))
 
-    def main(self):
-        user_data_dir = os.path.join(base_dir, "profiles", "whatsapp_stable_session")
-        if not os.path.isdir(user_data_dir):
-            log("⚠️ WhatsApp profile not found — skipping notification.")
-            return
+#             search_box = driver.find_element(by="xpath", value="//*[@placeholder='Search or start a new chat']")
+#             search_box.send_keys(f"{self.phone_number}\n")
+#             time.sleep(2)
 
-        message = f"poster-{photo_number} {self.status} at {self.published_time}"
-        driver = Driver(
-            browser="Chrome",
-            uc=True,
-            headless2=True,
-            agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
-            user_data_dir=user_data_dir,
-        )
-        try:
-            driver.get("https://web.whatsapp.com")
+#             type_box = driver.switch_to.active_element
+#             type_box.send_keys(f"{message}\n")
+#             time.sleep(3)
 
-            def ready_or_continue():
-                cont_buttons = driver.find_elements(by="xpath", value='//span[contains(text(),"Continue")]')
-                if cont_buttons:
-                    cont_buttons[0].click()
-                    return False  # keep polling; page needs a moment after the click
-                main_pane = driver.find_elements(by="xpath", value='//div[@id="side"]')
-                return bool(main_pane)
+#             checkmark_xpath = '//*[contains(@data-testid, "msg-check") or contains(@data-testid, "msg-dblcheck")]'
+#             try:
+#                 driver.wait_for_element_present(checkmark_xpath, timeout=15)
+#                 log("✅ WhatsApp message confirmed delivered.")
+#             except Exception:
+#                 log("⚠️ Delivery checkmark not seen; message was likely still sent.")
 
-            wait_until(ready_or_continue, timeout=90, poll_interval=2, description="WhatsApp Web to finish loading")
-
-            driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page1.png"))
-
-            search_box = driver.find_element(by="xpath", value="//*[@placeholder='Search or start a new chat']")
-            search_box.send_keys(f"{self.phone_number}\n")
-            time.sleep(2)
-
-            type_box = driver.switch_to.active_element
-            type_box.send_keys(f"{message}\n")
-            time.sleep(3)
-
-            checkmark_xpath = '//*[contains(@data-testid, "msg-check") or contains(@data-testid, "msg-dblcheck")]'
-            try:
-                driver.wait_for_element_present(checkmark_xpath, timeout=15)
-                log("✅ WhatsApp message confirmed delivered.")
-            except Exception:
-                log("⚠️ Delivery checkmark not seen; message was likely still sent.")
-
-            driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page2.png"))
-        except Exception as e:
-            log(f"⚠️ WhatsApp notification failed (non-fatal): {e}")
-        finally:
-            driver.quit()
-
-
+#             driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page2.png"))
+#         except Exception as e:
+#             log(f"⚠️ WhatsApp notification failed (non-fatal): {e}")
+#         finally:
+#             driver.quit()
 @dataclass
 class ListingConfig:
     number_of_bedrooms: str
@@ -184,7 +160,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="50000000",
+    price="5000",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         content
@@ -542,12 +518,10 @@ def main() -> int:
     try:
         driver.get("https://www.facebook.com/marketplace/you/selling")
         status_code = get_current_page_status_code(driver)
-        if status_code == 200:
-            log("✅ Page loaded successfully with status 200 OK.")
-        elif status_code == 404:
-            log("❌ Page not found (404).")
-        else:
-            log(f"⚠️ Unexpected status code received: {status_code}")
+        if status_code != 200:
+            log(f"❌ Target page return status {status_code} (Expected 200). Requesting profile rebuild...")
+            driver.quit()
+            sys.exit(99)
         driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_page.png"))
 
 
@@ -639,11 +613,18 @@ def main() -> int:
 
         published_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
         status_label = "published" if succeeded else "FAILED to publish"
-        try:
-            TelegramNotify(published_time=published_time, status=status_label).main()
-            # WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time, status_label).main()
-        except Exception as e:
-            log(f"⚠️ WhatsApp notification step failed (non-fatal): {e}")
+
+        write_github_output(
+            poster_number=photo_number,
+            published_time=published_time,
+            status=status_label,
+        )
+        log(f"Run finished — {status_label} at {published_time}")
+        # try:
+        #     TelegramNotify(published_time=published_time, status=status_label).main()
+        #     # WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time, status_label).main()
+        # except Exception as e:
+        #     log(f"⚠️ WhatsApp notification step failed (non-fatal): {e}")
 
         return 0 if succeeded else 1
 
