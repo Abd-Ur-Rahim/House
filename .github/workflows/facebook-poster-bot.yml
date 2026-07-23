@@ -2,8 +2,17 @@ name: Facebook Poster Bot
 
 on:
   schedule:
-    - cron: "0 * * * *"   # every hour, on the hour (UTC)
-  workflow_dispatch: {}     # adds a manual "Run workflow" button
+    # ── Peak windows ──
+    - cron: "0 6 * * 1-5"     # Weekday lunch window opens 12:00 SLT, Mon–Fri
+    - cron: "5 13 * * 1-4"    # Weekday evening window opens 19:05 SLT, Mon–Thu (offset 5m to avoid colliding with the 13:00 daily anchor below)
+    - cron: "0 2 * * 6"       # Saturday morning window opens 08:00 SLT, Sat
+
+    # ── General everyday coverage — 4x/day, every day, ~6h apart anchors ──
+    - cron: "0 1 * * *"       # ~06:30 SLT
+    - cron: "0 7 * * *"       # ~12:30 SLT
+    - cron: "0 13 * * *"      # ~18:30 SLT
+    - cron: "0 19 * * *"      # ~00:30 SLT
+  workflow_dispatch: {}
 
 concurrency:
   group: facebook-poster-bot
@@ -12,11 +21,31 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Random delay within window
+        if: github.event_name == 'schedule'
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 6 * * 1-5")
+              WINDOW_MINUTES=119 ;;   # lunch peak: 12:00–13:59 SLT
+            "5 13 * * 1-4")
+              WINDOW_MINUTES=179 ;;   # evening peak: 19:05–22:04 SLT
+            "0 2 * * 6")
+              WINDOW_MINUTES=119 ;;   # Saturday morning peak: 08:00–09:59 SLT
+            "0 1 * * *"|"0 7 * * *"|"0 13 * * *"|"0 19 * * *")
+              WINDOW_MINUTES=119 ;;   # general everyday anchors: ~2h jitter each
+            *)
+              WINDOW_MINUTES=0 ;;
+          esac
+
+          DELAY_SECONDS=$(( RANDOM % (WINDOW_MINUTES * 60 + 1) ))
+          echo "Trigger: ${{ github.event.schedule }} — sleeping ${DELAY_SECONDS}s (~$((DELAY_SECONDS/60)) min)"
+          sleep "$DELAY_SECONDS"
 
       - name: Restore Chrome login profiles from cache
         id: cache-restore
@@ -63,6 +92,8 @@ jobs:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
           WHATSAPP_NOTIFY_PHONE: ${{ secrets.WHATSAPP_NOTIFY_PHONE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 facebook_poster_bot.py
 
       - name: Save updated profiles back to cache

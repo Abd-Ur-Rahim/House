@@ -26,10 +26,16 @@ import random
 # --------------------------------------------------------------------------
 USE_FREE_PROXY = os.environ.get("USE_FREE_PROXY", "false").lower() == "true"
 WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE", "+94759257307")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_timezone = pytz.timezone("Asia/Colombo")
+photo_number = random.randint(1, 10)
+description_number = random.randint(1, 10)
 
+with open(os.path.join(base_dir,'poster','descriptions',f'{description_number}.txt'),'r',encoding="utf-8") as file:
+    content = file.read()
 
 def log(msg: str) -> None:
     """Timestamped print so CI logs are easy to correlate with real time."""
@@ -67,15 +73,46 @@ def get_free_proxy() -> str:
         log(f"⚠️ Proxy fetch failed: {e}")
     return ""
 
+class TelegramNotify:
+    """Sends a plain HTTPS notification via the Telegram Bot API — no
+    browser, no login session, no profile directory required."""
 
+    def __init__(self, bot_token: str = TELEGRAM_BOT_TOKEN, chat_id: str = TELEGRAM_CHAT_ID,
+                 published_time: str = "Error in time", status: str = "published"):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.published_time = published_time
+        self.status = status
+
+    def main(self):
+        if not self.bot_token or not self.chat_id:
+            log("⚠️ Telegram bot token/chat id not set — skipping notification.")
+            return
+
+        message = f"poster-{photo_number} {self.status} at {self.published_time}"
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+
+        try:
+            response = requests.post(
+                url,
+                data={"chat_id": self.chat_id, "text": message},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                log("✅ Telegram notification sent.")
+            else:
+                log(f"⚠️ Telegram notification failed — status {response.status_code}: {response.text}")
+        except Exception as e:
+            log(f"⚠️ Telegram notification failed (non-fatal): {e}")
 class WhatsappSendMsg:
     """Sends a WhatsApp Web notification once the listing has been posted.
     Requires a Chrome profile in profiles/whatsapp_stable_session that has
     already been logged in once (see whatsapp_profile_initializer.py)."""
 
-    def __init__(self, phone_no: str = WHATSAPP_NOTIFY_PHONE, published_time: str = "Error in time"):
+    def __init__(self, phone_no: str = WHATSAPP_NOTIFY_PHONE, published_time: str = "Error in time", status: str = "published"):
         self.published_time = published_time
         self.phone_number = phone_no
+        self.status = status
 
     def main(self):
         user_data_dir = os.path.join(base_dir, "profiles", "whatsapp_stable_session")
@@ -83,7 +120,7 @@ class WhatsappSendMsg:
             log("⚠️ WhatsApp profile not found — skipping notification.")
             return
 
-        message = f"Poster published at {self.published_time}"
+        message = f"poster-{photo_number} {self.status} at {self.published_time}"
         driver = Driver(
             browser="Chrome",
             uc=True,
@@ -144,48 +181,15 @@ class ListingConfig:
     fb_profile_dir: str = "Default"
     wait_seconds: int = 20
 
-
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
     price="50000000",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
-        """
-4 perches house for Sale (Rs 5 crores) — Colombo 12
-BELOW MARKET VALUE – OWNER SELLING DIRECTLY!
-
-Don't miss this incredible investment opportunity in the absolute heart of Colombo 12.
-Located at Wilson Street, this versatile property is perfect as a peaceful family home or a high-income commercial office.
-
-THE CALM ALUTHKADE ADVANTAGE: Located in a very calm, quiet, and highly residential pocket of Aluthkade.
-NOT in the crowded, noisy street-food zone — enjoy complete peace, privacy, and clean air.
-2 minutes walking distance to the Hulftsdorp Law Courts complex.
-Every single daily essential is a 5-10 minute walk or drive away:
-
-Healthcare: medical clinics, pharmacies, and general hospitals close by.
-Shopping: leading supermarkets, local groceries, and Pettah wholesale markets.
-Education: very close to top Colombo schools and tuition institutes.
-Transport: quick, effortless access to Colombo Fort Station and main highways.
-
-PROPERTY SPECIFICATIONS (4 perches):
-4 large, spacious bedrooms
-2 functional bathrooms
-Solid structural build with excellent natural ventilation
-100% clear deeds (suitable for a bank loan)
-
-PERFECT FOR:
-Families seeking a quiet, highly accessible residential neighborhood in Colombo.
-Lawyers looking for a premium, quiet office near court.
-Investors seeking rental yield in Colombo's business district.
-
-PRICE: LKR 50,000,000 (50 Million)
-Price negotiable after inspection for serious cash buyers.
-Direct buyers only — no brokers or agents, please.
-CALL OR WHATSAPP THE OWNER: 077 876 6001
-"""
+        content
     ),
-    photo_paths=[os.path.join(base_dir, "poster", "house_for_sale_flyer.png")],
+    photo_paths=[os.path.join(base_dir, "poster","flyers",f"posetr-{photo_number}.png")],
 )
 
 
@@ -410,78 +414,96 @@ def upload_photos(wait: WebDriverWait, photo_paths: list) -> bool:
         return False
 
 
-def click_through_to_publish(driver: webdriver.Chrome, wait: WebDriverWait, max_next_clicks: int = 3) -> None:
+def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriverWait,state:str, max_next_clicks: int = 3) -> None:
     """Clicks 'Next' as many times as the form requires (Facebook's
     Marketplace flow sometimes has one review step, sometimes more),
     waiting properly for each button instead of guessing with a fixed
     sleep. Stops clicking Next once no more Next button appears, then
     waits for and clicks Publish."""
-    for i in range(max_next_clicks):
-        try:
-            next_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Next')]"))
-            )
-        except TimeoutException:
-            log(f"  [info] No more 'Next' button found after {i} click(s) — assuming final review page.")
-            break
-        click_with_fallback(driver, next_button)
-        log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
-        time.sleep(2)
-
+    if state =='Publish':
+        for i in range(max_next_clicks):
+            try:
+                next_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Next')]"))
+                )
+            except TimeoutException:
+                log(f"  [info] No more 'Next' button found after {i} click(s) — assuming final review page.")
+                break
+            click_with_fallback(driver, next_button)
+            log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
+            time.sleep(2)
     try:
-        publish_button = WebDriverWait(driver, 20).until(
-            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Publish')]"))
+        publish_or_Update_button = WebDriverWait(driver, 20).until(
+            EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
         )
-        click_with_fallback(driver, publish_button)
+        click_with_fallback(driver, publish_or_Update_button)
         log("  [ok] Clicked 'Publish'")
     except TimeoutException:
         driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
         raise TimeoutException(
-            "Could not find 'Publish' button after clicking through the form. "
+            f"Could not find '{state}' button after clicking through the form. "
             "Facebook's form may have shown a validation error or an unexpected "
             "extra step — check screenshots/Submission_page.png."
         )
 
 
-def delete_previous_listing_if_present(driver: webdriver.Chrome) -> None:
-    """Deletes the previous 'For Sale' listing so the hourly re-post doesn't
-    pile up duplicates. No-ops if there's nothing to delete."""
+def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWait,cfg) -> None:
+    """edits the previous 'For Sale' listing so the hourly re-post doesn't
+    pile up duplicates. No-ops if there's nothing to edit."""
+    edit_results={}
     nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
     if nothing:
-        log("No previous listing found — nothing to delete.")
-        return
+        log("No previous listing found — nothing to edit.")
+        return True
 
     wait_until(
         lambda: driver.find_elements(by="xpath", value="//h1[contains(text(),'Selling')]"),
         timeout=30,
         description="'Selling' page to load",
     )
-    log("Step 0: Deleting previous listing")
+    log("Step 0: Editing previous listing")
 
     more_options = driver.find_elements(by="xpath", value="(//div[@aria-label='More options for 4 beds 2 baths House'])[1]")
     if not more_options:
-        log("  [skip] Could not locate the previous listing's options menu — skipping delete.")
-        return
+        log("  [skip] Could not locate the previous listing's options menu — skipping edit.")
+        return True
     more_options[0].click()
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
     time.sleep(3)
 
     wait_until(
-        lambda: driver.find_elements(by="xpath", value="//*[text()='Delete listing']"),
+        lambda: driver.find_elements(by="xpath", value="//*[text()='Edit listing']"),
         timeout=20,
-        description="'Delete listing' menu item",
+        description="'Edit listing' menu item",
     )
-    driver.find_element(by="xpath", value="//*[text()='Delete listing']").click()
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+    log("Step 1: Edit description")
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
+    textarea = driver.find_element(By.XPATH, "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea")
+    textarea.clear()
+    time.sleep(1)
+    edit_results["description"] = safe_fill(driver, wait,"//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
+            cfg.description, "Description",
+    )
+    log("Step 2: Edit photos")
+    remove_pics =driver.find_elements(by="xpath", value='//div[@aria-label="Remove photo from listing"]//*[local-name()="svg"]')
+    for remove_pic in remove_pics:
+        remove_pic.click()
+        time.sleep(1)
+    edit_results["photos"] = upload_photos(wait, cfg.photo_paths)
+    log("=" * 60)
+    log("Step 3: Update")
+    click_through_to_publish_or_update(driver, wait,'Update')
+    log("SUMMARY")
+    for step, ok in edit_results.items():
+        log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
+    log("=" * 60)
 
-    wait_until(
-        lambda: driver.find_elements(by="xpath", value="//*[text()='Delete']"),
-        timeout=20,
-        description="delete confirmation button",
-    )
-    delete_buttons = driver.find_elements(by="xpath", value="//*[text()='Delete']")
-    delete_buttons[-1].click()
-    log("Previous listing deleted.")
+    failed = [k for k, v in edit_results.items() if not v]
+    if failed:
+        log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
+    else:
+        log("All fields filled successfully edited.")
+    log("Previous listing edited.")
 
 
 def main() -> int:
@@ -494,75 +516,76 @@ def main() -> int:
 
     try:
         driver.get("https://www.facebook.com/marketplace/you/selling")
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_page.png"))
 
         try:
-            delete_previous_listing_if_present(driver)
+            nothing = edit_previous_listing_if_present(driver,wait,cfg)
         except TimeoutError as e:
             log(f"⚠️ {e} — continuing to create the new listing anyway.")
+            nothing = True
+        if nothing:    
+            driver.get("https://www.facebook.com/marketplace/create/rental")
+            wait_until(
+                lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Number of bedrooms')]"),
+                timeout=30,
+                description="marketplace 'create rental' form to load",
+            )
 
-        driver.get("https://www.facebook.com/marketplace/create/rental")
-        wait_until(
-            lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Rock Ball')]"),
-            timeout=30,
-            description="marketplace 'create rental' form to load",
-        )
+            log("Step 1: Listing type")
+            results["listing_type"] = select_listing_type_for_sale(wait, driver)
+            time.sleep(2.5)
 
-        log("Step 1: Listing type")
-        results["listing_type"] = select_listing_type_for_sale(wait, driver)
-        time.sleep(2.5)
+            log("Step 1b: Property type")
+            results["property_type"] = select_property_subtype(wait, driver, cfg.property_type)
+            time.sleep(2.5)
 
-        log("Step 1b: Property type")
-        results["property_type"] = select_property_subtype(wait, driver, cfg.property_type)
-        time.sleep(2.5)
+            log("Step 2: Number of bedrooms")
+            results["number_of_bedrooms"] = safe_fill(
+                driver, wait, "//span[contains(text(), 'Number of bedrooms')]/ancestor::label//input",
+                cfg.number_of_bedrooms, "Number of bedrooms",
+            )
 
-        log("Step 2: Number of bedrooms")
-        results["number_of_bedrooms"] = safe_fill(
-            driver, wait, "//span[contains(text(), 'Number of bedrooms')]/ancestor::label//input",
-            cfg.number_of_bedrooms, "Number of bedrooms",
-        )
+            log("Step 3: Number of bathrooms")
+            results["number_of_bathrooms"] = safe_fill(
+                driver, wait, "//span[contains(text(), 'Number of bathrooms')]/ancestor::label//input",
+                cfg.number_of_bathrooms, "Number of bathrooms",
+            )
 
-        log("Step 3: Number of bathrooms")
-        results["number_of_bathrooms"] = safe_fill(
-            driver, wait, "//span[contains(text(), 'Number of bathrooms')]/ancestor::label//input",
-            cfg.number_of_bathrooms, "Number of bathrooms",
-        )
+            log("Step 4: Price")
+            results["price"] = safe_fill(
+                driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
+            )
 
-        log("Step 4: Price")
-        results["price"] = safe_fill(
-            driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
-        )
+            log("Step 5: Description")
+            results["description"] = safe_fill(
+                driver, wait,
+                "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
+                cfg.description, "Description",
+            )
 
-        log("Step 5: Description")
-        results["description"] = safe_fill(
-            driver, wait,
-            "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
-            cfg.description, "Description",
-        )
+            log("Step 6: Location")
+            results["location"] = select_first_suggestion(
+                driver, wait, "//input[@role='combobox' and @aria-autocomplete='list' and not(@placeholder)]",
+                cfg.location, "Location",
+            )
 
-        log("Step 6: Location")
-        results["location"] = select_first_suggestion(
-            driver, wait, "//input[@role='combobox' and @aria-autocomplete='list' and not(@placeholder)]",
-            cfg.location, "Location",
-        )
+            log("Step 7: Photos")
+            results["photos"] = upload_photos(wait, cfg.photo_paths)
 
-        log("Step 7: Photos")
-        results["photos"] = upload_photos(wait, cfg.photo_paths)
+            log("Step 8: Submission")
+            click_through_to_publish_or_update(driver, wait,'Publish')
 
-        log("Step 8: Submission")
-        click_through_to_publish(driver, wait)
+            log("=" * 60)
+            log("SUMMARY")
+            for step, ok in results.items():
+                log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
+            log("=" * 60)
 
-        log("=" * 60)
-        log("SUMMARY")
-        for step, ok in results.items():
-            log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
-        log("=" * 60)
-
-        failed = [k for k, v in results.items() if not v]
-        if failed:
-            log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
-        else:
-            log("All fields filled successfully.")
+            failed = [k for k, v in results.items() if not v]
+            if failed:
+                log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
+            else:
+                log("All fields filled successfully.")
 
         try:
             wait_until(
@@ -582,12 +605,14 @@ def main() -> int:
         driver.quit()
 
         published_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
+        status_label = "published" if succeeded else "FAILED to publish"
         try:
-            WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time).main()
+            TelegramNotify(published_time=published_time, status=status_label).main()
+            # WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time, status_label).main()
         except Exception as e:
             log(f"⚠️ WhatsApp notification step failed (non-fatal): {e}")
 
-    return 0 if succeeded else 1
+        return 0 if succeeded else 1
 
 
 if __name__ == "__main__":
