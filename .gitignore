@@ -7,4 +7,5 @@ downloaded_files/
 __pycache__/
 *.pyc
 google-chrome-stable_current_amd64.deb
+screenshots/
 screenshots/*.png

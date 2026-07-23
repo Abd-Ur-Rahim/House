@@ -84,6 +84,8 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       # ── FIRST ATTEMPT ──
+      - name: Create screenshots directory
+        run: mkdir -p screenshots
       - name: Run Facebook Poster Bot
         id: bot
         continue-on-error: true
