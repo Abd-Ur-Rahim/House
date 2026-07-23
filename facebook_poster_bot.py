@@ -189,7 +189,7 @@ CONFIG = ListingConfig(
     description=(
         content
     ),
-    photo_paths=[os.path.join(base_dir, "poster","flyers",f"posetr-{photo_number}.png")],
+    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number}.png")],
 )
 
 

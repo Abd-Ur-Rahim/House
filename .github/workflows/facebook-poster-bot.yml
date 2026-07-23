@@ -9,9 +9,8 @@ on:
 
     # ── General everyday coverage — 4x/day, every day, ~6h apart anchors ──
     - cron: "0 1 * * *"       # ~06:30 SLT
-    - cron: "0 7 * * *"       # ~12:30 SLT
-    - cron: "0 13 * * *"      # ~18:30 SLT
-    - cron: "0 19 * * *"      # ~00:30 SLT
+    - cron: "0 9 * * *"       # ~12:30 SLT
+    - cron: "0 14 * * *"      # ~18:30 SLT
   workflow_dispatch: {}
 
 concurrency:
@@ -95,6 +94,19 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 facebook_poster_bot.py
+
+      # Without this, screenshots taken during the run are lost forever
+      # the moment the ephemeral runner shuts down — making failures
+      # impossible to actually diagnose. Download these from the run's
+      # summary page under "Artifacts" after each run.
+      - name: Upload screenshots as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-screenshots-${{ github.run_id }}
+          path: screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Save updated profiles back to cache
         if: always()
