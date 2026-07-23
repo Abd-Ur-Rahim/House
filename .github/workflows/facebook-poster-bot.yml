@@ -70,10 +70,10 @@ jobs:
             echo "No cache and no profiles.zip found — profiles/ will be empty this run."
           fi
 
-      - name: Install Google Chrome
+      - name: Install System Dependencies & Google Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget
+          sudo apt-get install -y wget python3-tk python3-dev
           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y /tmp/chrome.deb
           rm /tmp/chrome.deb
