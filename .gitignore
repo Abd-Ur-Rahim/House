@@ -2,8 +2,9 @@
 profiles/
 screenshots/
 downloaded_files/
-*.png
-*.lock
+screenshots/*.png
+*_qr.png
+*_auth.png
 .env
 __pycache__/
 *.pyc
