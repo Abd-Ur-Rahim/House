@@ -439,32 +439,45 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         description="'Selling' page to load",
     )
     log("Step 0: Editing previous listing")
-
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s0.png"))
+    
     more_options = driver.find_elements(by="xpath", value="(//div[@aria-label='More options for 4 beds 2 baths House'])[1]")
     if not more_options:
         log("  [skip] Could not locate the previous listing's options menu — skipping edit.")
         return True
     more_options[0].click()
     time.sleep(3)
+    edit_button = wait.until(
+        EC.element_to_be_clickable((By.XPATH, "//*[text()='Edit listing']"))
+    )
+    click_with_fallback(driver, edit_button)
 
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_e0.png"))
+
+    log("Step 1: Edit description")
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s1.png"))
     wait_until(
         lambda: driver.find_elements(by="xpath", value="//*[text()='Edit listing']"),
         timeout=20,
         description="'Edit listing' menu item",
     )
-    log("Step 1: Edit description")
     textarea = driver.find_element(By.XPATH, "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea")
     textarea.clear()
     time.sleep(1)
     edit_results["description"] = safe_fill(driver, wait,"//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
             cfg.description, "Description",
     )
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_e1.png"))
+    
     log("Step 2: Edit photos")
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s2.png"))
     remove_pics =driver.find_elements(by="xpath", value='//div[@aria-label="Remove photo from listing"]//*[local-name()="svg"]')
     for remove_pic in remove_pics:
         remove_pic.click()
         time.sleep(1)
     edit_results["photos"] = upload_photos(wait, cfg.photo_paths)
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_e2.png"))
+
     log("=" * 60)
     log("Step 3: Update")
     click_through_to_publish_or_update(driver, wait,'Update')
