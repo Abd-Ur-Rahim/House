@@ -270,7 +270,7 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
     try:
         el = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
         el.click()
-        time.sleep(random.randint(2,10))
+        time.sleep(random.randint(0,5))
         set_text_via_js(driver, el, value)
         log(f"  [ok] {field_name} filled")
         return True
@@ -287,7 +287,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
     try:
         el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
         el.click()
-        time.sleep(random.randint(2,10))
+        time.sleep(random.randint(0,5))
         el.clear()
         for char in value:
             el.send_keys(char)
@@ -295,7 +295,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
 
         first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
         first_suggestion.click()
-        time.sleep(random.randint(1,10))
+        time.sleep(random.randint(0,5))
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
     except TimeoutException:
@@ -323,7 +323,7 @@ def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) 
                 wait.until(
                     EC.element_to_be_clickable((By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']"))
                 ).click()
-                time.sleep(random.randint(2,10))
+                time.sleep(random.randint(0,5))
                 log(f"  [ok] Listing type set to '{label}'")
                 return True
 
@@ -345,7 +345,7 @@ def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) 
 def click_with_fallback(driver, element):
     try:
         element.click()
-        time.sleep(random.randint(2,10))
+        time.sleep(random.randint(0,5))
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
 
@@ -436,7 +436,7 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
         )
-        # driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{state}_page.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{state}_page.png"))
         click_with_fallback(driver, publish_or_Update_button)
         log("  [ok] Clicked 'Publish'")
     except TimeoutException:
@@ -452,7 +452,7 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     pile up duplicates. No-ops if there's nothing to edit."""
     edit_results={}
     nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page.png"))
     if nothing:
         log("No previous listing found — nothing to edit.")
         return True
@@ -463,7 +463,7 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         description="'Selling' page to load",
     )
     log("Step 0: Editing previous listing")
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s0.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s0.png"))
     
     more_options = driver.find_elements(by="xpath", value="(//div[@aria-label='More options for 4 beds 2 baths House'])[1]")
     if not more_options:
@@ -476,10 +476,10 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     )
     click_with_fallback(driver, edit_button)
 
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_e0.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step0.png"))
 
     log("Step 1: Edit description")
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s1.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step1.png"))
     wait_until(
         lambda: driver.find_elements(by="xpath", value="//*[text()='Edit listing']"),
         timeout=20,
@@ -491,10 +491,10 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     edit_results["description"] = safe_fill(driver, wait,"//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
             cfg.description, "Description",
     )
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_e1.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step1.png"))
     
     log("Step 2: Edit photos")
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s2.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step2.png"))
     remove_pics =driver.find_elements(by="xpath", value='//div[@aria-label="Remove photo from listing"]//*[local-name()="svg"]')
     for remove_pic in remove_pics:
         remove_pic.click()
@@ -514,7 +514,7 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
     else:
         log("All fields filled successfully edited.")
-    # driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edited_post.png"))
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step2.png"))
     log("Previous listing edited.")
         
 def main() -> int:
@@ -527,10 +527,10 @@ def main() -> int:
 
     try:
         driver.get("https://www.facebook.com/marketplace/you/selling")
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
         if "login" in driver.current_url.lower():
             log("❌ Redirected to login page. Session expired or invalid. Requesting profile rebuild...")
             sys.exit(99)
-        # driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
 
 
         try:
