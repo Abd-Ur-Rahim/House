@@ -165,7 +165,7 @@ CONFIG = ListingConfig(
     description=(
         content
     ),
-    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number}.png")],
+    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-0{photo_number}.png")],
 )
 
 
@@ -479,35 +479,6 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     else:
         log("All fields filled successfully edited.")
     log("Previous listing edited.")
-
-def get_current_page_status_code(driver: webdriver.Chrome) -> int:
-    """Retrieves the HTTP status code of the current page loaded in Selenium."""
-    current_url = driver.current_url
-    log(f"🔍 Checking HTTP status code for current page: {current_url}")
-    
-    try:
-        session = requests.Session()
-        
-        # Copy browser cookies to the requests session so authenticated pages return 200 instead of 302/401
-        for cookie in driver.get_cookies():
-            session.cookies.set(cookie['name'], cookie['value'])
-            
-        # Copy browser User-Agent to avoid bot blocks
-        user_agent = driver.execute_script("return navigator.userAgent;")
-        headers = {"User-Agent": user_agent}
-
-        # Send a HEAD or GET request to fetch the status code
-        response = session.get(current_url, headers=headers, timeout=10)
-        status_code = response.status_code
-        current_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
-        error_img_path = f"screenshots/failure_{current_time}.png"
-        driver.save_screenshot(error_img_path)
-        log(f"🌐 HTTP Status Code: {status_code}")
-        return status_code
-
-    except requests.exceptions.RequestException as e:
-        log(f"⚠️ Failed to get HTTP status code: {e}")
-        return 0
         
 def main() -> int:
     cfg = CONFIG
@@ -519,10 +490,8 @@ def main() -> int:
 
     try:
         driver.get("https://www.facebook.com/marketplace/you/selling")
-        status_code = get_current_page_status_code(driver)
-        if status_code != 200:
-            log(f"❌ Target page return status {status_code} (Expected 200). Requesting profile rebuild...")
-            driver.quit()
+        if "login" in driver.current_url.lower():
+            log("❌ Redirected to login page. Session expired or invalid. Requesting profile rebuild...")
             sys.exit(99)
         driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
 
@@ -607,11 +576,22 @@ def main() -> int:
         except TimeoutError as e:
             log(f"⚠️ {e} — the listing may still have gone through; check the screenshot.")
 
+    except SystemExit as e:
+        # Re-raise SystemExit so the script actually exits with the 99 status code
+        raise e
     except Exception as e:
         log(f"❌ Unhandled error: {e}")
     finally:
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
-        driver.quit()
+        # SAFEGUARD: Catch errors if driver is already dead/closed
+        try:
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
+        except Exception as e:
+            log(f"⚠️ Could not save final screenshot (Browser might be closed): {e}")
+            
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
         published_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
         status_label = "published" if succeeded else "FAILED to publish"
@@ -622,11 +602,6 @@ def main() -> int:
             status=status_label,
         )
         log(f"Run finished — {status_label} at {published_time}")
-        # try:
-        #     TelegramNotify(published_time=published_time, status=status_label).main()
-        #     # WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time, status_label).main()
-        # except Exception as e:
-        #     log(f"⚠️ WhatsApp notification step failed (non-fatal): {e}")
 
         return 0 if succeeded else 1
 
