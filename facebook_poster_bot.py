@@ -24,7 +24,7 @@ import random
 # --------------------------------------------------------------------------
 # Config knobs you can override without touching code (handy for CI secrets)
 # --------------------------------------------------------------------------
-USE_FREE_PROXY = os.environ.get("USE_FREE_PROXY", "false").lower() == "true"
+WEBSHARE_API_URL = os.environ.get("WEBSHARE_API_URL")
 # WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,19 +57,7 @@ def wait_until(condition_fn, timeout: int = 60, poll_interval: float = 2.0, desc
     raise TimeoutError(f"Timed out after {timeout}s waiting for: {description}")
 
 
-def get_free_proxy() -> str:
-    if not USE_FREE_PROXY:
-        return ""
-    try:
-        url = "https://proxyscrape.com"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            proxies = [p.strip() for p in response.text.splitlines() if p.strip()]
-            if proxies:
-                return random.choice(proxies)
-    except Exception as e:
-        log(f"⚠️ Proxy fetch failed: {e}")
-    return ""
+
 def write_github_output(**kwargs) -> None:
     """Writes key=value pairs to GITHUB_OUTPUT so the workflow step can
     read them via steps.<id>.outputs.<key>. No-ops locally (outside CI)
@@ -169,57 +157,88 @@ CONFIG = ListingConfig(
 )
 
 
-def build_driver(cfg: ListingConfig) -> webdriver.Chrome:
+
+
+def get_webshare_proxy() -> str:
+    """Fetches your private proxies from Webshare and formats them for SeleniumBase."""
+    if not WEBSHARE_API_URL:
+        log("⚠️ No WEBSHARE_API_URL found in environment variables.")
+        return ""
+        
+    try:
+        log("🔄 Fetching private proxies from Webshare...")
+        response = requests.get(WEBSHARE_API_URL, timeout=10)
+        
+        if response.status_code == 200:
+            # Webshare returns a text file separated by newlines
+            proxies = [p.strip() for p in response.text.splitlines() if p.strip()]
+            
+            if proxies:
+                chosen = random.choice(proxies)
+                # Webshare format is IP:Port:User:Pass
+                parts = chosen.split(":")
+                
+                if len(parts) == 4:
+                    ip, port, user, password = parts
+                    # SeleniumBase needs format: user:pass@ip:port
+                    formatted_proxy = f"{user}:{password}@{ip}:{port}"
+                    log(f"✅ Successfully loaded Webshare proxy: {ip}:{port}")
+                    return formatted_proxy
+                else:
+                    log("⚠️ Proxy format was unexpected.")
+                    
+    except Exception as e:
+        log(f"⚠️ Proxy fetch failed: {e}")
+        
+    return ""
+
+def build_driver(cfg: ListingConfig):
     if not os.path.isdir(cfg.fb_profile):
         sys.exit(
             f"Chrome profile directory not found:\n  {cfg.fb_profile}\n"
-            "Run facebook_profile_initializer.py once first to log in and "
-            "create this session."
+            "Run facebook_profile_initializer.py once first to log in."
         )
 
-    max_attempts = 3 if USE_FREE_PROXY else 1
-
+    max_attempts = 3
+    
     for attempt in range(max_attempts):
-        options = Options()
-        options.add_argument(f"user-data-dir={cfg.fb_profile}")
-        options.add_argument(f"profile-directory={cfg.fb_profile_dir}")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--headless=new")
-        options.add_argument("--window-size=1920,1080")
-
-        proxy_ip_port = get_free_proxy()
-        if proxy_ip_port:
-            log(f"📡 Attempt {attempt + 1}/{max_attempts}: testing proxy {proxy_ip_port}")
-            options.add_argument(f"--proxy-server={proxy_ip_port}")
-        else:
+        proxy_string = get_webshare_proxy()
+        
+        if not proxy_string:
             log("➡️ Proceeding without a proxy (using the runner's own IP)...")
+            proxy_string = None # Let it run normally if proxy fails
+        else:
+            log(f"📡 Attempt {attempt + 1}/{max_attempts}: testing Webshare proxy...")
 
         try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+            # 🚀 Switch from webdriver.Chrome to SeleniumBase Driver!
+            # It automatically bypasses bot detection AND handles proxy passwords
+            driver = Driver(
+                browser="chrome",
+                uc=True,                  # Undetected mode (bypasses Facebook bot checks)
+                headless=True,            # Runs invisibly in GitHub Actions
+                user_data_dir=cfg.fb_profile,
+                proxy=proxy_string        # Automatically handles User:Pass!
+                block_images=True 
+               )
 
-            if proxy_ip_port:
-                driver.set_page_load_timeout(10)
+            # Give it a quick test to make sure the proxy connects
+            driver.set_page_load_timeout(15)
+            if proxy_string:
                 try:
                     driver.get("https://google.com")
                     log("✅ Proxy connection successful! Proceeding to Facebook...")
                     return driver
                 except Exception:
-                    log("❌ Selected proxy is dead. Retrying with a fresh one...")
+                    log("❌ Selected proxy timed out. Retrying with a different one...")
                     driver.quit()
                     continue
-            else:
-                return driver
+            
+            return driver
 
         except Exception as e:
-            if "already running with this profile" in str(e) or "user data directory is already in use" in str(e):
-                sys.exit(
-                    "Failed to launch Chrome with this profile.\n"
-                    "Most common cause: Chrome is already running with this profile — "
-                    "close every Chrome window first and try again.\n"
-                    f"Underlying error: {e}"
-                )
+            if "already in use" in str(e).lower():
+                sys.exit("❌ Chrome is already running with this profile. Close other Chrome windows.")
             log(f"⚠️ Driver initialization error on attempt {attempt + 1}: {e}")
 
     sys.exit("❌ All connection attempts failed. Script terminated.")
