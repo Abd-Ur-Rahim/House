@@ -148,7 +148,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="50000000",
+    price="50",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         """
