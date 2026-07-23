@@ -1,0 +1,69 @@
+name: Facebook Poster Bot
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # every hour, on the hour (UTC)
+  workflow_dispatch: {}     # adds a manual "Run workflow" button
+
+concurrency:
+  group: facebook-poster-bot
+  cancel-in-progress: true
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore Chrome login profiles from cache
+        id: cache-restore
+        uses: actions/cache@v4
+        with:
+          path: profiles
+          key: browser-profiles-${{ github.run_id }}
+          restore-keys: |
+            browser-profiles-
+
+      # ONE-TIME BOOTSTRAP: only runs if the cache above found nothing AND
+      # a profiles.zip is sitting in the repo (from your Codespace).
+      # Delete this step (and profiles.zip) once you've confirmed the cache
+      # is populated — it should only ever need to fire once.
+      - name: Seed profiles from committed zip (first run only)
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        run: |
+          if [ -f profiles.zip ]; then
+            echo "No cache found — seeding from profiles.zip"
+            unzip -o profiles.zip -d .
+          else
+            echo "No cache and no profiles.zip found — profiles/ will be empty this run."
+          fi
+
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/chrome.deb
+          rm /tmp/chrome.deb
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run Facebook Poster Bot
+        env:
+          FB_EMAIL: ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+          WHATSAPP_NOTIFY_PHONE: ${{ secrets.WHATSAPP_NOTIFY_PHONE }}
+        run: python3 facebook_poster_bot.py
+
+      - name: Save updated profiles back to cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: profiles
+          key: browser-profiles-${{ github.run_id }}

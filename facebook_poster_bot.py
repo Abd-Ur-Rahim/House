@@ -1,0 +1,565 @@
+import os
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from selenium import webdriver
+from selenium.common.exceptions import (
+    TimeoutException,
+    ElementClickInterceptedException,
+)
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+from seleniumbase import Driver
+import pytz
+import requests
+import random
+
+
+# --------------------------------------------------------------------------
+# Config knobs you can override without touching code (handy for CI secrets)
+# --------------------------------------------------------------------------
+USE_FREE_PROXY = os.environ.get("USE_FREE_PROXY", "false").lower() == "true"
+WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE", "+94759257307")
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+local_timezone = pytz.timezone("Asia/Colombo")
+
+
+def log(msg: str) -> None:
+    """Timestamped print so CI logs are easy to correlate with real time."""
+    stamp = datetime.now(local_timezone).strftime("%H:%M:%S")
+    print(f"[{stamp}] {msg}")
+
+
+def wait_until(condition_fn, timeout: int = 60, poll_interval: float = 2.0, description: str = "condition") -> bool:
+    """Bounded polling helper. Replaces bare `while True:` loops that could
+    hang forever if a page never reaches the expected state.
+    Returns True if condition_fn() returned truthy before the timeout.
+    Raises TimeoutError otherwise."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if condition_fn():
+                return True
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Timed out after {timeout}s waiting for: {description}")
+
+
+def get_free_proxy() -> str:
+    if not USE_FREE_PROXY:
+        return ""
+    try:
+        url = "https://proxyscrape.com"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            proxies = [p.strip() for p in response.text.splitlines() if p.strip()]
+            if proxies:
+                return random.choice(proxies)
+    except Exception as e:
+        log(f"⚠️ Proxy fetch failed: {e}")
+    return ""
+
+
+class WhatsappSendMsg:
+    """Sends a WhatsApp Web notification once the listing has been posted.
+    Requires a Chrome profile in profiles/whatsapp_stable_session that has
+    already been logged in once (see whatsapp_profile_initializer.py)."""
+
+    def __init__(self, phone_no: str = WHATSAPP_NOTIFY_PHONE, published_time: str = "Error in time"):
+        self.published_time = published_time
+        self.phone_number = phone_no
+
+    def main(self):
+        user_data_dir = os.path.join(base_dir, "profiles", "whatsapp_stable_session")
+        if not os.path.isdir(user_data_dir):
+            log("⚠️ WhatsApp profile not found — skipping notification.")
+            return
+
+        message = f"Poster published at {self.published_time}"
+        driver = Driver(
+            browser="Chrome",
+            uc=True,
+            headless2=True,
+            agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            user_data_dir=user_data_dir,
+        )
+        try:
+            driver.get("https://web.whatsapp.com")
+
+            def ready_or_continue():
+                cont_buttons = driver.find_elements(by="xpath", value='//span[contains(text(),"Continue")]')
+                if cont_buttons:
+                    cont_buttons[0].click()
+                    return False  # keep polling; page needs a moment after the click
+                main_pane = driver.find_elements(by="xpath", value='//div[@id="side"]')
+                return bool(main_pane)
+
+            wait_until(ready_or_continue, timeout=90, poll_interval=2, description="WhatsApp Web to finish loading")
+
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page1.png"))
+
+            search_box = driver.find_element(by="xpath", value="//*[@placeholder='Search or start a new chat']")
+            search_box.send_keys(f"{self.phone_number}\n")
+            time.sleep(2)
+
+            type_box = driver.switch_to.active_element
+            type_box.send_keys(f"{message}\n")
+            time.sleep(3)
+
+            checkmark_xpath = '//*[contains(@data-testid, "msg-check") or contains(@data-testid, "msg-dblcheck")]'
+            try:
+                driver.wait_for_element_present(checkmark_xpath, timeout=15)
+                log("✅ WhatsApp message confirmed delivered.")
+            except Exception:
+                log("⚠️ Delivery checkmark not seen; message was likely still sent.")
+
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", "whatsapp_page2.png"))
+        except Exception as e:
+            log(f"⚠️ WhatsApp notification failed (non-fatal): {e}")
+        finally:
+            driver.quit()
+
+
+@dataclass
+class ListingConfig:
+    number_of_bedrooms: str
+    number_of_bathrooms: str
+    location: str
+    price: str  # digits only, e.g. "50000000"
+    description: str
+    fb_profile: str = os.path.join(base_dir, "profiles", "facebook_stable_session")
+    photo_paths: list = field(default_factory=list)
+    property_type: str = "House"
+    fb_profile_dir: str = "Default"
+    wait_seconds: int = 20
+
+
+CONFIG = ListingConfig(
+    number_of_bedrooms="4",
+    number_of_bathrooms="2",
+    price="50000000",
+    location="Wilson Street, 12 Colombo, Sri Lanka",
+    description=(
+        """
+4 perches house for Sale (Rs 5 crores) — Colombo 12
+BELOW MARKET VALUE – OWNER SELLING DIRECTLY!
+
+Don't miss this incredible investment opportunity in the absolute heart of Colombo 12.
+Located at Wilson Street, this versatile property is perfect as a peaceful family home or a high-income commercial office.
+
+THE CALM ALUTHKADE ADVANTAGE: Located in a very calm, quiet, and highly residential pocket of Aluthkade.
+NOT in the crowded, noisy street-food zone — enjoy complete peace, privacy, and clean air.
+2 minutes walking distance to the Hulftsdorp Law Courts complex.
+Every single daily essential is a 5-10 minute walk or drive away:
+
+Healthcare: medical clinics, pharmacies, and general hospitals close by.
+Shopping: leading supermarkets, local groceries, and Pettah wholesale markets.
+Education: very close to top Colombo schools and tuition institutes.
+Transport: quick, effortless access to Colombo Fort Station and main highways.
+
+PROPERTY SPECIFICATIONS (4 perches):
+4 large, spacious bedrooms
+2 functional bathrooms
+Solid structural build with excellent natural ventilation
+100% clear deeds (suitable for a bank loan)
+
+PERFECT FOR:
+Families seeking a quiet, highly accessible residential neighborhood in Colombo.
+Lawyers looking for a premium, quiet office near court.
+Investors seeking rental yield in Colombo's business district.
+
+PRICE: LKR 50,000,000 (50 Million)
+Price negotiable after inspection for serious cash buyers.
+Direct buyers only — no brokers or agents, please.
+CALL OR WHATSAPP THE OWNER: 077 876 6001
+"""
+    ),
+    photo_paths=[os.path.join(base_dir, "poster", "house_for_sale_flyer.png")],
+)
+
+
+def build_driver(cfg: ListingConfig) -> webdriver.Chrome:
+    if not os.path.isdir(cfg.fb_profile):
+        sys.exit(
+            f"Chrome profile directory not found:\n  {cfg.fb_profile}\n"
+            "Run facebook_profile_initializer.py once first to log in and "
+            "create this session."
+        )
+
+    max_attempts = 3 if USE_FREE_PROXY else 1
+
+    for attempt in range(max_attempts):
+        options = Options()
+        options.add_argument(f"user-data-dir={cfg.fb_profile}")
+        options.add_argument(f"profile-directory={cfg.fb_profile_dir}")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+
+        proxy_ip_port = get_free_proxy()
+        if proxy_ip_port:
+            log(f"📡 Attempt {attempt + 1}/{max_attempts}: testing proxy {proxy_ip_port}")
+            options.add_argument(f"--proxy-server={proxy_ip_port}")
+        else:
+            log("➡️ Proceeding without a proxy (using the runner's own IP)...")
+
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+            if proxy_ip_port:
+                driver.set_page_load_timeout(10)
+                try:
+                    driver.get("https://google.com")
+                    log("✅ Proxy connection successful! Proceeding to Facebook...")
+                    return driver
+                except Exception:
+                    log("❌ Selected proxy is dead. Retrying with a fresh one...")
+                    driver.quit()
+                    continue
+            else:
+                return driver
+
+        except Exception as e:
+            if "already running with this profile" in str(e) or "user data directory is already in use" in str(e):
+                sys.exit(
+                    "Failed to launch Chrome with this profile.\n"
+                    "Most common cause: Chrome is already running with this profile — "
+                    "close every Chrome window first and try again.\n"
+                    f"Underlying error: {e}"
+                )
+            log(f"⚠️ Driver initialization error on attempt {attempt + 1}: {e}")
+
+    sys.exit("❌ All connection attempts failed. Script terminated.")
+
+
+def set_text_via_js(driver: webdriver.Chrome, element, text: str) -> None:
+    """Set a textarea/input's value via JS, using the native value setter so
+    React (which controls Facebook's form) picks up the change. This bypasses
+    ChromeDriver's send_keys(), which cannot transmit characters outside the
+    Basic Multilingual Plane (most emoji) and throws
+    'unknown error: ChromeDriver only supports characters in the BMP'."""
+    tag = element.tag_name.lower()
+    setter_class = "HTMLTextAreaElement" if tag == "textarea" else "HTMLInputElement"
+    driver.execute_script(
+        f"""
+        var el = arguments[0];
+        var value = arguments[1];
+        var setter = Object.getOwnPropertyDescriptor(window.{setter_class}.prototype, 'value').set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        """,
+        element,
+        text,
+    )
+
+
+def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
+    try:
+        el = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+        el.click()
+        set_text_via_js(driver, el, value)
+        log(f"  [ok] {field_name} filled")
+        return True
+    except TimeoutException:
+        log(f"  [FAIL] Could not find '{field_name}' field (timed out). "
+            f"Facebook may have changed the page layout, or the form hasn't loaded that field yet.")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error filling '{field_name}': {e}")
+        return False
+
+
+def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
+    try:
+        el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        el.click()
+        el.clear()
+        for char in value:
+            el.send_keys(char)
+            time.sleep(0.05)
+
+        first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
+        first_suggestion.click()
+        log(f"  [ok] {field_name} filled and first suggestion selected")
+        return True
+    except TimeoutException:
+        log(f"  [FAIL] Could not find '{field_name}' field or its suggestion dropdown (timed out).")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error filling '{field_name}': {e}")
+        return False
+
+
+def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) -> bool:
+    try:
+        dropdown = wait.until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//span[contains(text(), 'Property for sale or to let')]/ancestor::*[@role='combobox'][1]")
+            )
+        )
+        dropdown.click()
+        time.sleep(1)
+
+        option_candidates = ["For sale", "Sale", "Property for sale", "sale", "for sale"]
+        for label in option_candidates:
+            opts = driver.find_elements(By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']")
+            if opts:
+                wait.until(
+                    EC.element_to_be_clickable((By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']"))
+                ).click()
+                log(f"  [ok] Listing type set to '{label}'")
+                return True
+
+        all_opts = driver.find_elements(By.XPATH, "//div[@role='option']")
+        log(f"  [debug] Dropdown opened but no known label matched. Options seen: {[o.text for o in all_opts]}")
+        return False
+
+    except TimeoutException:
+        log("  [FAIL] 'Property for sale or to let' dropdown not clickable in time.")
+        return False
+    except ElementClickInterceptedException:
+        log("  [FAIL] Dropdown click was blocked by another element.")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error selecting listing type: {e}")
+        return False
+
+
+def click_with_fallback(driver, element):
+    try:
+        element.click()
+    except ElementClickInterceptedException:
+        driver.execute_script("arguments[0].click();", element)
+
+
+def select_property_subtype(wait: WebDriverWait, driver: webdriver.Chrome, property_type: str = "House") -> bool:
+    try:
+        try:
+            WebDriverWait(driver, 3).until(EC.invisibility_of_element_located((By.XPATH, "//div[@role='option']")))
+        except TimeoutException:
+            pass
+
+        dropdown = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//span[normalize-space()='Property type']/ancestor::*[@role='combobox'][1]"))
+        )
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", dropdown)
+        time.sleep(0.5)
+        click_with_fallback(driver, dropdown)
+        time.sleep(1)
+
+        option = wait.until(
+            EC.presence_of_element_located((By.XPATH, f"//div[@role='option']//span[normalize-space()='{property_type}']"))
+        )
+        click_with_fallback(driver, option)
+        log(f"  [ok] Property type set to '{property_type}'")
+        return True
+
+    except TimeoutException:
+        all_opts = driver.find_elements(By.XPATH, "//div[@role='option']")
+        log(f"  [FAIL] Could not find/click '{property_type}' option. Options seen (if any): {[o.text for o in all_opts]}")
+        return False
+    except ElementClickInterceptedException:
+        log("  [FAIL] Dropdown click was blocked even after fallback attempt.")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error selecting property subtype: {e}")
+        return False
+
+
+def upload_photos(wait: WebDriverWait, photo_paths: list) -> bool:
+    if not photo_paths:
+        log("  [skip] No photos configured")
+        return True
+
+    missing = [p for p in photo_paths if not os.path.isfile(p)]
+    if missing:
+        for p in missing:
+            log(f"  [FAIL] Photo file not found: {p}")
+        return False
+
+    try:
+        uploader = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//input[@type='file' and @accept='image/*,image/heif,image/heic']"))
+        )
+        for i, photo in enumerate(photo_paths):
+            abs_path = os.path.abspath(photo)
+            log(f"  [processing] Uploading photo {i+1}/{len(photo_paths)}: {abs_path}")
+            uploader.send_keys(abs_path)
+            time.sleep(1.5)
+
+        log(f"  [ok] {len(photo_paths)} photo(s) submitted for upload successfully")
+        time.sleep(2)
+        return True
+
+    except TimeoutException:
+        log("  [FAIL] Could not find the photo upload input.")
+        return False
+
+
+def delete_previous_listing_if_present(driver: webdriver.Chrome) -> None:
+    """Deletes the previous 'For Sale' listing so the hourly re-post doesn't
+    pile up duplicates. No-ops if there's nothing to delete."""
+    nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
+    if nothing:
+        log("No previous listing found — nothing to delete.")
+        return
+
+    wait_until(
+        lambda: driver.find_elements(by="xpath", value="//h1[contains(text(),'Selling')]"),
+        timeout=30,
+        description="'Selling' page to load",
+    )
+    log("Step 0: Deleting previous listing")
+
+    more_options = driver.find_elements(by="xpath", value="(//div[@aria-label='More options for 4 beds 2 baths House'])[1]")
+    if not more_options:
+        log("  [skip] Could not locate the previous listing's options menu — skipping delete.")
+        return
+    more_options[0].click()
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+    time.sleep(3)
+
+    wait_until(
+        lambda: driver.find_elements(by="xpath", value="//*[text()='Delete listing']"),
+        timeout=20,
+        description="'Delete listing' menu item",
+    )
+    driver.find_element(by="xpath", value="//*[text()='Delete listing']").click()
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+
+    wait_until(
+        lambda: driver.find_elements(by="xpath", value="//*[text()='Delete']"),
+        timeout=20,
+        description="delete confirmation button",
+    )
+    delete_buttons = driver.find_elements(by="xpath", value="//*[text()='Delete']")
+    delete_buttons[-1].click()
+    log("Previous listing deleted.")
+
+
+def main() -> int:
+    cfg = CONFIG
+    log("Launching Chrome with your profile...")
+    driver = build_driver(cfg)
+    wait = WebDriverWait(driver, cfg.wait_seconds)
+    results = {}
+    succeeded = False
+
+    try:
+        driver.get("https://www.facebook.com/marketplace/you/selling")
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Delete_page.png"))
+
+        try:
+            delete_previous_listing_if_present(driver)
+        except TimeoutError as e:
+            log(f"⚠️ {e} — continuing to create the new listing anyway.")
+
+        driver.get("https://www.facebook.com/marketplace/create/rental")
+        wait_until(
+            lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Rock Ball')]"),
+            timeout=30,
+            description="marketplace 'create rental' form to load",
+        )
+
+        log("Step 1: Listing type")
+        results["listing_type"] = select_listing_type_for_sale(wait, driver)
+        time.sleep(2.5)
+
+        log("Step 1b: Property type")
+        results["property_type"] = select_property_subtype(wait, driver, cfg.property_type)
+        time.sleep(2.5)
+
+        log("Step 2: Number of bedrooms")
+        results["number_of_bedrooms"] = safe_fill(
+            driver, wait, "//span[contains(text(), 'Number of bedrooms')]/ancestor::label//input",
+            cfg.number_of_bedrooms, "Number of bedrooms",
+        )
+
+        log("Step 3: Number of bathrooms")
+        results["number_of_bathrooms"] = safe_fill(
+            driver, wait, "//span[contains(text(), 'Number of bathrooms')]/ancestor::label//input",
+            cfg.number_of_bathrooms, "Number of bathrooms",
+        )
+
+        log("Step 4: Price")
+        results["price"] = safe_fill(
+            driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
+        )
+
+        log("Step 5: Description")
+        results["description"] = safe_fill(
+            driver, wait,
+            "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
+            cfg.description, "Description",
+        )
+
+        log("Step 6: Location")
+        results["location"] = select_first_suggestion(
+            driver, wait, "//input[@role='combobox' and @aria-autocomplete='list' and not(@placeholder)]",
+            cfg.location, "Location",
+        )
+
+        log("Step 7: Photos")
+        results["photos"] = upload_photos(wait, cfg.photo_paths)
+
+        log("Step 8: Submission")
+        next_button = driver.find_element(by="xpath", value="//span[contains(text(),'Next')]")
+        next_button.click()
+        time.sleep(2)
+        publish_button = driver.find_element(by="xpath", value="//span[contains(text(),'Publish')]")
+        publish_button.click()
+
+        log("=" * 60)
+        log("SUMMARY")
+        for step, ok in results.items():
+            log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
+        log("=" * 60)
+
+        failed = [k for k, v in results.items() if not v]
+        if failed:
+            log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
+        else:
+            log("All fields filled successfully.")
+
+        try:
+            wait_until(
+                lambda: driver.find_elements(by="xpath", value="//h1[contains(text(),'Selling')]"),
+                timeout=60,
+                description="listing to finish publishing",
+            )
+            succeeded = True
+            log("Published.")
+        except TimeoutError as e:
+            log(f"⚠️ {e} — the listing may still have gone through; check the screenshot.")
+
+    except Exception as e:
+        log(f"❌ Unhandled error: {e}")
+    finally:
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
+        driver.quit()
+
+        published_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
+        try:
+            WhatsappSendMsg(WHATSAPP_NOTIFY_PHONE, published_time).main()
+        except Exception as e:
+            log(f"⚠️ WhatsApp notification step failed (non-fatal): {e}")
+
+    return 0 if succeeded else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

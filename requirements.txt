@@ -1,0 +1,5 @@
+selenium
+seleniumbase
+webdriver-manager
+pytz
+requests
