@@ -114,7 +114,7 @@ jobs:
           cd profiles/facebook_stable_session
           rm -rf "Default/Code Cache" "Default/Cache" optimization_guide_model_store component_crx_cache WasmTtsEngine || true
           cd ../..
-          zip -r profiles.zip profiles/facebook_stable_session/
+          zip -r profiles.zip profiles/facebook_stable_session/ -x "*/Singleton*" "*/LOCK" "*/.com.google.Chrome.*" "*cache*"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add profiles.zip
