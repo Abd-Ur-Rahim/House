@@ -1,11 +1,10 @@
 # Never commit these — they contain live login session data or local artifacts
 profiles/
-screenshots/
 downloaded_files/
-screenshots/*.png
 *_qr.png
 *_auth.png
 .env
 __pycache__/
 *.pyc
 google-chrome-stable_current_amd64.deb
+screenshots/*.png
