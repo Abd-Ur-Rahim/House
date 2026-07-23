@@ -452,6 +452,7 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
     pile up duplicates. No-ops if there's nothing to edit."""
     edit_results={}
     nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
     if nothing:
         log("No previous listing found — nothing to edit.")
         return True
@@ -468,7 +469,6 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
         log("  [skip] Could not locate the previous listing's options menu — skipping edit.")
         return True
     more_options[0].click()
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_page.png"))
     time.sleep(3)
 
     wait_until(
