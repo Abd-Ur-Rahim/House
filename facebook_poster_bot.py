@@ -499,8 +499,8 @@ def get_current_page_status_code(driver: webdriver.Chrome) -> int:
         # Send a HEAD or GET request to fetch the status code
         response = session.get(current_url, headers=headers, timeout=10)
         status_code = response.status_code
-        timestamp = int(time.time())
-        error_img_path = f"screenshots/failure_{timestamp}.png"
+        current_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
+        error_img_path = f"screenshots/failure_{current_time}.png"
         driver.save_screenshot(error_img_path)
         log(f"🌐 HTTP Status Code: {status_code}")
         return status_code
