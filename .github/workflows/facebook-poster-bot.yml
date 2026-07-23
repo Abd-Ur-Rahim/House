@@ -168,19 +168,17 @@ jobs:
             -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d "parse_mode=Markdown" \
             -d "text=${MSG}"
-      - name: Send all screenshots to Telegram
+- name: Send all screenshots to Telegram
         if: always()
         run: |
           BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
           CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
           SCREENSHOT_DIR="screenshots"
 
-          if [ ! -d "$SCREENSHOT_DIR" ] || [ -z "$(ls -A $SCREENSHOT_DIR 2>/dev/null)" ]; then
-            echo "No screenshots found — skipping."
-            exit 0
-          fi
+          # Create directory if missing so find doesn't fail
+          mkdir -p "$SCREENSHOT_DIR"
 
-          # Collect all png/jpg files into an array
+          # Collect all png/jpg/jpeg files into an array safely
           FILES=()
           while IFS= read -r -d '' f; do
             FILES+=("$f")
@@ -190,7 +188,7 @@ jobs:
           echo "Found $TOTAL screenshot(s)."
 
           if [ "$TOTAL" -eq 0 ]; then
-            echo "No image files found — skipping."
+            echo "No screenshot images found — skipping Telegram upload."
             exit 0
           fi
 
