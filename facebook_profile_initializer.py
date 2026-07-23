@@ -103,7 +103,7 @@ def run_script():
                 print(f"[{attempt+1}] State synced to 'facebook_auth.png'. Check for 2FA screens.")
 
         except Exception as error_msg:
-                    current_time = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = int(time.time())
             os.makedirs("screenshots", exist_ok=True)
             error_img_path = f"screenshots/failure_initializer_{timestamp}.png"
             sb.driver.save_screenshot(error_img_path)
