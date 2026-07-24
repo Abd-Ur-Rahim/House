@@ -279,8 +279,10 @@ jobs:
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
           WEBSHARE_API_URL: ${{ secrets.WEBSHARE_API_URL }}
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
-          PROXY_HOST: "127.0.0.1"
-          PROXY_PORT: "10808"
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}                                          "change5.owlproxy.com"
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}                                          "7778"
+          PROXY_USER: ${{ secrets.PROXY_USER }}                                          "fUWQyxGvIl90_custom_zone_LK_st__city_sid_96075910_time_90"
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}                                          "5181770"
         run: python3 facebook_poster_bot.py
 
       # ── REBUILD ALERT & STEP ──
@@ -319,8 +321,10 @@ jobs:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
-          PROXY_HOST: "127.0.0.1"
-          PROXY_PORT: "10808"
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}                                          "change5.owlproxy.com"
+          PROXY_PORT: ${{ secrets.PROXY_PORT }}                                          "7778"
+          PROXY_USER: ${{ secrets.PROXY_USER }}                                          "fUWQyxGvIl90_custom_zone_LK_st__city_sid_96075910_time_90"
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}                                          "5181770"
         run: python3 facebook_poster_bot.py
 
       # ── ARTIFACTS & CACHE ──

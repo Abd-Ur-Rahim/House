@@ -21,10 +21,17 @@ import random
 # --------------------------------------------------------------------------
 # Config knobs you can override without touching code (handy for CI secrets)
 # --------------------------------------------------------------------------
+
 WEBSHARE_API_URL = os.environ.get("WEBSHARE_API_URL")
-PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
-PROXY_PORT = os.environ.get("PROXY_PORT", "10808")
+# PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
+# PROXY_PORT = os.environ.get("PROXY_PORT", "10808")
 # WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE")
+PROXY_HOST = os.environ.get("PROXY_HOST")
+PROXY_PORT = os.environ.get("PROXY_PORT")
+PROXY_USER = os.environ.get("PROXY_USER")
+PROXY_PASS = os.environ.get("PROXY_PASS")
+
+
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_timezone = pytz.timezone("Asia/Colombo")
@@ -106,6 +113,11 @@ def get_local_proxy() -> str:
     so they can be changed without touching code."""
     return f"socks5://{PROXY_HOST}:{PROXY_PORT}"
 
+def get_owl_proxy() -> str:
+    """Formats the OwlProxy string for SeleniumBase."""
+    if PROXY_USER and PROXY_PASS:
+        return f"{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    return f"{PROXY_HOST}:{PROXY_PORT}"
 
 def get_webshare_proxy() -> str:
     """Fetches your private proxies from Webshare and formats them for SeleniumBase.
@@ -147,45 +159,33 @@ def build_driver(cfg: ListingConfig):
             "Run facebook_profile_initializer.py once first to log in."
         )
 
-    proxy_addr = f"{PROXY_HOST}:{PROXY_PORT}"
+    # Use SeleniumBase native proxy parameter which handles SOCKS5 auth
+    proxy_string = get_owl_proxy()
     max_attempts = 3
 
     for attempt in range(max_attempts):
         try:
-            # Pass the proxy as a raw Chrome flag via SeleniumBase's
-            # chromium_arg parameter instead of proxy=. proxy= triggers
-            # SeleniumBase's own auth-proxy-extension logic, which can hang
-            # Chrome's startup (never binding the debugger port) when
-            # combined with uc=True. A plain --proxy-server flag has no such
-            # auth-extension path. NOTE: Driver() does NOT accept a raw
-            # options= kwarg — chromium_arg is the supported way to add
-            # extra command-line flags (comma-separated "arg1,arg2" string,
-            # no leading dashes needed).
-            chromium_arg = f"proxy-server=socks5://{proxy_addr}"
-
-            # NOTE: uc=True (undetected-chromedriver) is unreliable with
-            # headless=True — the debugger port frequently never comes up
-            # ("cannot connect to chrome at 127.0.0.1:9222"). headless2=True
-            # runs through a virtual display instead and is the combination
-            # SeleniumBase recommends for uc mode in CI.
+            log(f"Attempting browser launch with proxy: {PROXY_HOST}:{PROXY_PORT} (Attempt {attempt + 1})")
+            
             driver = Driver(
                 browser="chrome",
                 uc=True,
                 headless2=True,
                 user_data_dir=cfg.fb_profile,
                 block_images=True,
-                chromium_arg=chromium_arg,
+                proxy=proxy_string,  # <-- SeleniumBase auto-handles SOCKS5 + Credentials
             )
 
-            driver.set_page_load_timeout(20)
+            driver.set_page_load_timeout(30)
             try:
                 driver.get("https://ifconfig.me")
-                log(f"✅ Proxy connection successful (attempt {attempt + 1}). Proceeding to Facebook...")
+                ip = driver.find_element(By.TAG_NAME, "body").text.strip()
+                log(f"✅ Proxy connection successful! Public IP: {ip}. Proceeding to Facebook...")
                 return driver
             except Exception as e:
                 log(f"❌ Proxy test failed on attempt {attempt + 1}/{max_attempts}: {e}")
                 driver.quit()
-                time.sleep(3)  # give xray-core a moment in case it's still starting up
+                time.sleep(3)
                 continue
 
         except Exception as e:
@@ -194,10 +194,7 @@ def build_driver(cfg: ListingConfig):
             log(f"⚠️ Driver initialization error on attempt {attempt + 1}/{max_attempts}: {e}")
             time.sleep(3)
 
-    sys.exit(
-        "❌ All connection attempts failed. Check that the xray-core proxy step "
-        "succeeded earlier in the workflow and is still running (pgrep -a xray)."
-    )
+    sys.exit("❌ All proxy connection attempts failed.")
 
 
 def set_text_via_js(driver: webdriver.Chrome, element, text: str) -> None:
