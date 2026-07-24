@@ -516,7 +516,7 @@ def main() -> int:
     succeeded = False
 
     try:
-        driver.get("https://www.facebook.com/marketplace/you/selling")
+        driver.get("https://web.facebook.com/marketplace/you/selling?_rdc=1&_rdr#")
         driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
         if "login" in driver.current_url.lower():
             log("❌ Redirected to login page. Session expired or invalid. Requesting profile rebuild...")
@@ -528,7 +528,7 @@ def main() -> int:
             log(f"⚠️ {e} — continuing to create the new listing anyway.")
             nothing = True
         if nothing:
-            driver.get("https://www.facebook.com/marketplace/create/rental")
+            driver.get("https://web.facebook.com/marketplace/create/rental")
             wait_until(
                 lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Number of bedrooms')]"),
                 timeout=30,
