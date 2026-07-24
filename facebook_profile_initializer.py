@@ -54,9 +54,9 @@ def run_script():
             is_standard_login = any(sb.is_element_visible(sel) for sel in email_selectors)
 
             if not is_standard_login:
-                timestamp = int(time.time())
-                error_img_path = f"screenshots/failure_initializer_{timestamp}.png"
-                sb.driver.save_screenshot(error_img_path)
+                # timestamp = int(time.time())
+                # error_img_path = f"screenshots/failure_initializer_{timestamp}.png"
+                # sb.driver.save_screenshot(error_img_path)
 
                 print("🔄 Saved profile screen detected. Attempting to click 'Continue'...")
                 try:

@@ -505,7 +505,55 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome, wait: WebDriverWa
         log("All fields filled successfully edited.")
     driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step2.png"))
     log("Previous listing edited.")
+def navigate_to_marketplace_via_ui(driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
+    """Navigates to Marketplace by clicking through the normal UI path
+    (home → Marketplace nav icon) instead of a direct driver.get() to a
+    deep URL. Mimics organic navigation, which may reduce automation
+    signals compared to hitting /marketplace/... directly."""
+    try:
+        driver.get("https://www.facebook.com/")
+        time.sleep(random.randint(2, 4))
 
+        marketplace_link = wait.until(
+            EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, '/marketplace') and @aria-label='Marketplace']"))
+        )
+        click_with_fallback(driver, marketplace_link)
+        time.sleep(random.randint(2, 4))
+        log("  [ok] Navigated to Marketplace via nav bar click.")
+        return True
+    except TimeoutException:
+        log("  [FAIL] Could not find Marketplace nav icon — falling back to direct URL.")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error navigating to Marketplace via UI: {e}")
+        return False
+
+
+def click_create_new_listing(driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
+    """Clicks 'Create new listing' from the Marketplace home page,
+    then selects the rental/property listing type, instead of jumping
+    straight to /marketplace/create/rental."""
+    try:
+        create_button = wait.until(
+            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Create new listing')]"))
+        )
+        click_with_fallback(driver, create_button)
+        time.sleep(random.randint(2, 4))
+
+        # This usually opens a category picker (Item, Vehicle, Property Rental, etc.)
+        property_option = wait.until(
+            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Property for rent') or contains(text(),'Property Rental') or contains(text(),'Home')]"))
+        )
+        click_with_fallback(driver, property_option)
+        time.sleep(random.randint(2, 4))
+        log("  [ok] Clicked through to the rental listing creation form.")
+        return True
+    except TimeoutException:
+        log("  [FAIL] Could not find 'Create new listing' / property category option.")
+        return False
+    except Exception as e:
+        log(f"  [FAIL] Error clicking through to create listing: {e}")
+        return False
 
 def main() -> int:
     cfg = CONFIG
@@ -517,7 +565,8 @@ def main() -> int:
 
     try:
         driver.get("https://web.facebook.com/marketplace/you/selling?_rdc=1&_rdr#")
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "edit_Selling_page.png"))
+        driver.get("https://web.facebook.com/marketplace/create/rental")
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", "rental_page.png"))
         if "login" in driver.current_url.lower():
             log("❌ Redirected to login page. Session expired or invalid. Requesting profile rebuild...")
             sys.exit(99)
@@ -529,6 +578,7 @@ def main() -> int:
             nothing = True
         if nothing:
             driver.get("https://web.facebook.com/marketplace/create/rental")
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", "rental_page.png"))
             wait_until(
                 lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Number of bedrooms')]"),
                 timeout=30,
