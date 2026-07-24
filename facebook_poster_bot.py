@@ -308,7 +308,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
         return False
 
 
-def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) -> bool:
+def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) -> bool:
     try:
         dropdown = wait.until(
             EC.element_to_be_clickable(
@@ -318,7 +318,7 @@ def select_listing_type_for_sale(wait: WebDriverWait, driver: webdriver.Chrome) 
         dropdown.click()
         time.sleep(1)
 
-        option_candidates = ["For sale", "Sale", "Property for sale", "sale", "for sale"]
+        option_candidates = ["Rent","For rent","for rent"]
         for label in option_candidates:
             opts = driver.find_elements(By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']")
             if opts:
