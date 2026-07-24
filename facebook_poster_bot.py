@@ -215,7 +215,7 @@ def build_driver(cfg: ListingConfig):
                 log("✅ Proxy connection successful! Proceeding to Facebook...")
                 return driver
             except Exception as e:
-                driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+                driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
                 log(f"❌ Proxy unreachable (attempt {attempt + 1}/{max_attempts}). "
                     "Is the xray-core process running on 127.0.0.1:10808?")
                 driver.quit()
@@ -224,7 +224,7 @@ def build_driver(cfg: ListingConfig):
         except Exception as e:
             if "already in use" in str(e).lower():
                 sys.exit("❌ Chrome already running with this profile.")
-            driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
             log(f"⚠️ Driver init error on attempt {attempt + 1}: {e}")
     sys.exit("❌ Could not connect via local VLESS proxy after all attempts. "
               "Check that the Xray step ran successfully earlier in the workflow.")
@@ -261,12 +261,12 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
         log(f"  [ok] {field_name} filled")
         return True
     except TimeoutException as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Could not find '{field_name}' field (timed out). "
             f"Facebook may have changed the page layout, or the form hasn't loaded that field yet.")
         return False
     except Exception as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error filling '{field_name}': {e}")
         return False
 
@@ -288,11 +288,11 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
     except TimeoutException as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Could not find '{field_name}' field or its suggestion dropdown (timed out).")
         return False
     except Exception as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error filling '{field_name}': {e}")
         return False
 
@@ -323,15 +323,15 @@ def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) 
         return False
 
     except TimeoutException as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log("  [FAIL] 'Property for sale or to let' dropdown not clickable in time.")
         return False
     except ElementClickInterceptedException as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log("  [FAIL] Dropdown click was blocked by another element.")
         return False
     except Exception as e:
-        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error selecting listing type: {e}")
         return False
 

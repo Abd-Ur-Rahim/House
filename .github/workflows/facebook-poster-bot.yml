@@ -204,7 +204,9 @@ jobs:
       - name: Create screenshots directory
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         run: mkdir -p screenshots
+
       - name: Start VLESS proxy client
+        if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         env:
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
         run: |
@@ -257,10 +259,17 @@ jobs:
               json.dump(config, f, indent=2)
           PYEOF
 
-              nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
-              sleep 3
-              echo "Xray started, testing connection..."
-              curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me || echo "⚠️ Proxy test failed"
+          nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
+          sleep 3
+          echo "Xray started, testing connection..."
+          curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me || echo "⚠️ Proxy test failed"
+
+      - name: Verify xray is still running
+        if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
+        run: |
+          pgrep -a xray || echo "❌ xray is NOT running anymore"
+          cat xray.log 2>/dev/null || echo "no xray.log found"
+
       - name: Run Facebook Poster Bot
         id: bot
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
