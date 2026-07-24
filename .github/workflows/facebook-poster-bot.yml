@@ -2,15 +2,14 @@ name: Facebook Poster Bot
 
 on:
   schedule:
-    # ── Peak windows ──
-    - cron: "0 6 * * 1-5"     # Weekday lunch window opens 12:00 SLT, Mon–Fri
-    - cron: "5 13 * * 1-4"    # Weekday evening window opens 19:05 SLT, Mon–Thu (offset 5m to avoid colliding with 13:00 anchor)
-    - cron: "0 2 * * 6"       # Saturday morning window opens 08:00 SLT, Sat
+    # ── Peak windows (Original Strings Kept) ──
+    - cron: "0 6 * * 1-5"     # Special: Weekday lunch (Fires 11:30 AM SLT)
+    - cron: "5 13 * * 1-4"    # Special: Weekday evening (Fires 18:35 PM SLT)
+    - cron: "0 2 * * 6"       # Special: Saturday morning (Fires 07:30 AM SLT)
 
-    # ── General everyday coverage — 4x/day, every day, ~6h apart anchors ──
-    - cron: "0 1 * * *"       # ~06:30 SLT
-    - cron: "0 9 * * *"       # ~12:30 SLT
-    - cron: "0 14 * * *"      # ~18:30 SLT
+    # ── General everyday coverage (Original Strings Kept) ──
+    - cron: "0 3 * * *"       # General Anchor 1 (Fires 08:30 AM SLT)
+    - cron: "0 10 * * *"      # General Anchor 2 (Fires 15:30 PM SLT)
   workflow_dispatch: {}
 
 permissions:
@@ -29,24 +28,136 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 1. Resolve Current Sri Lanka Date and Day
+      - name: Calculate SLT Meta Information
+        id: meta
+        run: |
+          SLT_DATE=$(date -d "+5 hours 30 minutes" +"%Y-%m-%d")
+          SLT_DAY_OF_WEEK=$(date -d "+5 hours 30 minutes" +"%u") # 1=Mon, 7=Sun
+          echo "date=$SLT_DATE" >> $GITHUB_OUTPUT
+          echo "day=$SLT_DAY_OF_WEEK" >> $GITHUB_OUTPUT
+
+          case "${{ github.event.schedule }}" in
+            "0 6 * * 1-5"|"5 13 * * 1-4"|"0 2 * * 6")
+              echo "type=special" >> $GITHUB_OUTPUT ;;
+            *)
+              echo "type=general" >> $GITHUB_OUTPUT ;;
+          esac
+
+      # 2. Re-establish today's persistent state
+      - name: Restore Daily Run Counter
+        id: cache-counter
+        uses: actions/cache/restore@v4
+        with:
+          path: .run_tracker.env
+          key: run-tracker-${{ steps.meta.outputs.date }}
+
+      # 3. Apply Multi-Slot Protection System
+      - name: Evaluate Priority Slot Rules
+        id: gatekeeper
+        run: |
+          if [ ! -f .run_tracker.env ]; then
+            echo "TOTAL_RUNS=0" > .run_tracker.env
+            echo "SPECIAL_RUNS=0" >> .run_tracker.env
+          fi
+
+          source .run_tracker.env
+          CRON_TYPE="${{ steps.meta.outputs.type }}"
+          DAY="${{ steps.meta.outputs.day }}"
+          CRON_STR="${{ github.event.schedule }}"
+          SHOULD_SKIP=false
+
+          echo "Incoming Trigger: [$CRON_STR] ($CRON_TYPE)"
+          echo "Current Daily State: Total=$TOTAL_RUNS, Special Runs=$SPECIAL_RUNS"
+
+          # RULE 1: Enforce global limit of 2 completed posts max per calendar day
+          if [ "$TOTAL_RUNS" -ge 2 ]; then
+            echo "❌ Cap hit ($TOTAL_RUNS/2 posts completed). Cancelling run."
+            SHOULD_SKIP=true
+          fi
+
+          # RULE 2: Sequence-Aware Reservation System for General Crons
+          if [ "$SHOULD_SKIP" = "false" ] && [ "$CRON_TYPE" = "general" ]; then
+            
+            # Mon-Thu (2 Specials scheduled)
+            if [ "$DAY" -le 4 ]; then
+              # 08:30 AM Anchor: Must skip because 2 specials are coming up later
+              # 15:30 PM Anchor: Lunch already ran (SPECIAL_RUNS=1). 1 Evening special remains.
+              # Since only 1 slot is left (TOTAL_RUNS=1), we must block this general to save it.
+              TOTAL_EXPECTED_SPECIALS=2
+            
+            # Fri (1 Lunch Special scheduled)
+            elif [ "$DAY" -eq 5 ]; then
+              if [ "$CRON_STR" = "0 3 * * *" ]; then
+                # 08:30 AM runs. 1 special is coming up, meaning 1 slot is safe for General.
+                TOTAL_EXPECTED_SPECIALS=1
+              else
+                # 15:30 PM Anchor. Lunch already ran or expired. No more specials.
+                TOTAL_EXPECTED_SPECIALS=1
+              fi
+
+            # Sat (1 Morning Special scheduled)
+            elif [ "$DAY" -eq 6 ]; then
+              TOTAL_EXPECTED_SPECIALS=1
+
+            # Sun (0 Specials scheduled)
+            else
+              TOTAL_EXPECTED_SPECIALS=0
+            fi
+
+            REMAINING_SPECIALS=$(( TOTAL_EXPECTED_SPECIALS - SPECIAL_RUNS ))
+            AVAILABLE_SLOTS=$(( 2 - TOTAL_RUNS ))
+
+            if [ "$REMAINING_SPECIALS" -ge "$AVAILABLE_SLOTS" ] && [ "$REMAINING_SPECIALS" -gt 0 ]; then
+              echo "⚠️ Reservation Guard: Blocking General cron to reserve remaining slot for Special event."
+              SHOULD_SKIP=true
+            fi
+          fi
+
+          # Commit status checks
+          if [ "$SHOULD_SKIP" = "true" ]; then
+            echo "proceed=false" >> $GITHUB_OUTPUT
+          else
+            TOTAL_RUNS=$(( TOTAL_RUNS + 1 ))
+            if [ "$CRON_TYPE" = "special" ]; then
+              SPECIAL_RUNS=$(( SPECIAL_RUNS + 1 ))
+            fi
+
+            echo "TOTAL_RUNS=$TOTAL_RUNS" > .run_tracker.env
+            echo "SPECIAL_RUNS=$SPECIAL_RUNS" >> .run_tracker.env
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "✅ Slot Authorized. Daily Target: $TOTAL_RUNS/2"
+          fi
+
+      # 4. Sync State to Cache Engine
+      - name: Save Updated Counter State
+        if: steps.gatekeeper.outputs.proceed == 'true' && github.event_name == 'schedule'
+        uses: actions/cache/save@v4
+        with:
+          path: .run_tracker.env
+          key: run-tracker-${{ steps.meta.outputs.date }}
+
+      # 5. Gracefully terminate workflow early if skipped by rules
+      - name: Verify Authorization
+        if: steps.gatekeeper.outputs.proceed != 'true' && github.event_name == 'schedule'
+        run: |
+          echo "Slot denied by priority matrix. Safely shutting down."
+          exit 0
+
+      # 6. Your Jitter Window Filter
       - name: Random delay within window
         if: github.event_name == 'schedule'
         run: |
           case "${{ github.event.schedule }}" in
-            "0 6 * * 1-5")
-              WINDOW_MINUTES=119 ;;   # lunch peak: 12:00–13:59 SLT
-            "5 13 * * 1-4")
-              WINDOW_MINUTES=179 ;;   # evening peak: 19:05–21:59 SLT
-            "0 2 * * 6")
-              WINDOW_MINUTES=119 ;;   # Saturday morning peak: 08:00–09:59 SLT
-            "0 1 * * *"|"0 9 * * *"|"0 14 * * *")
-              WINDOW_MINUTES=119 ;;   # general everyday anchors: ~2h jitter each
-            *)
-              WINDOW_MINUTES=0 ;;
+            "0 6 * * 1-5")   WINDOW_MINUTES=119 ;;
+            "5 13 * * 1-4")  WINDOW_MINUTES=179 ;;
+            "0 2 * * 6")     WINDOW_MINUTES=119 ;;
+            "0 3 * * *"|"0 10 * * *") WINDOW_MINUTES=119 ;;
+            *) WINDOW_MINUTES=0 ;;
           esac
 
           DELAY_SECONDS=$(( RANDOM % (WINDOW_MINUTES * 60 + 1) ))
-          echo "Trigger: ${{ github.event.schedule }} — sleeping ${DELAY_SECONDS}s (~$((DELAY_SECONDS/60)) min)"
+          echo "Sleeping ${DELAY_SECONDS}s (~$((DELAY_SECONDS/60)) min)"
           sleep "$DELAY_SECONDS"
 
       - name: Restore Chrome login profiles from cache
