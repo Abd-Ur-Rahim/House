@@ -2,8 +2,8 @@ from seleniumbase import SB
 import time
 import os
 import random
-FB_EMAIL = os.environ.get("FB_EMAIL",'rockingrock2003@gmail.com')
-FB_PASSWORD = os.environ.get("FB_PASSWORD",'Abdur@15497')
+FB_EMAIL = os.environ.get("FB_EMAIL")
+FB_PASSWORD = os.environ.get("FB_PASSWORD")
 if not FB_EMAIL or not FB_PASSWORD:
     raise SystemExit(
         "Missing credentials. Set FB_EMAIL and FB_PASSWORD as environment "
