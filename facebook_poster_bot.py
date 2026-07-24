@@ -202,7 +202,7 @@ def build_driver(cfg: ListingConfig):
             f"Chrome profile directory not found:\n  {cfg.fb_profile}\n"
             "Run facebook_profile_initializer.py once first to log in."
         )
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
+    
     proxy_string = get_local_proxy()  # fetch once — retrying won't change it
     max_attempts = 3
 
@@ -213,6 +213,7 @@ def build_driver(cfg: ListingConfig):
                 user_data_dir=cfg.fb_profile, proxy=proxy_string, block_images=True,
             )
             driver.set_page_load_timeout(15)
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
             try:
                 driver.get("https://google.com")
                 log("✅ Proxy connection successful! Proceeding to Facebook...")
