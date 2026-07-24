@@ -204,7 +204,47 @@ jobs:
       - name: Create screenshots directory
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         run: mkdir -p screenshots
-
+      - name: Start VLESS proxy client
+        run: |
+          wget -q https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -q Xray-linux-64.zip -d xray
+          cat > xray/config.json << 'EOF'
+          {
+            "inbounds": [{
+              "port": 10808,
+              "listen": "127.0.0.1",
+              "protocol": "socks",
+              "settings": { "udp": true }
+            }],
+            "outbounds": [{
+              "protocol": "vless",
+              "settings": {
+                "vnext": [{
+                  "address": "129.150.62.91",
+                  "port": 443,
+                  "users": [{
+                    "id": "aa321a1e-2dd7-497f-bd2b-37105e2c639b",
+                    "flow": "xtls-rprx-vision",
+                    "encryption": "none"
+                  }]
+                }]
+              },
+              "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                  "serverName": "facebook.com",
+                  "fingerprint": "chrome",
+                  "publicKey": "2JSA8EbCZoSz0W8bvkutU8FOp9DepyPnVLYNs8atqys",
+                  "shortId": "ad86f8f1"
+                }
+              }
+            }]
+          }
+          EOF
+          nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
+          sleep 3
+          echo "Xray started"
       - name: Run Facebook Poster Bot
         id: bot
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'

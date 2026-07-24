@@ -156,7 +156,9 @@ CONFIG = ListingConfig(
     photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-0{photo_number}.png")],
 )
 
-
+def get_local_proxy() -> str:
+    """Uses the local xray-core SOCKS5 listener instead of Webshare."""
+    return "socks5://127.0.0.1:10808"
 
 
 def get_webshare_proxy() -> str:
@@ -202,7 +204,7 @@ def build_driver(cfg: ListingConfig):
     max_attempts = 3
     
     for attempt in range(max_attempts):
-        proxy_string = get_webshare_proxy()
+        proxy_string = get_local_proxy()
         
         if not proxy_string:
             log("➡️ Proceeding without a proxy (using the runner's own IP)...")
