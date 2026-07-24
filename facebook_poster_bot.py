@@ -198,8 +198,11 @@ def get_webshare_proxy() -> str:
 
 def build_driver(cfg: ListingConfig):
     if not os.path.isdir(cfg.fb_profile):
-        sys.exit(...)
-
+        sys.exit(
+            f"Chrome profile directory not found:\n  {cfg.fb_profile}\n"
+            "Run facebook_profile_initializer.py once first to log in."
+        )
+    driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
     proxy_string = get_local_proxy()  # fetch once — retrying won't change it
     max_attempts = 3
 
