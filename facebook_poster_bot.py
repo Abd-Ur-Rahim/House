@@ -290,28 +290,78 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
         return False
 
 
-def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
+def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, value: str, field_name: str) -> bool:
+    # XPaths to locate Facebook Marketplace Location input across different UI versions
+    location_xpaths = [
+        "//label[@aria-label='Location']//input",
+        "//span[contains(text(), 'Location')]/ancestor::label//input",
+        "//input[@role='combobox' and @aria-autocomplete='list']",
+        "//input[contains(@aria-label, 'Location')]"
+    ]
+
+    el = None
+    for xpath in location_xpaths:
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+            if elements and elements[0].is_displayed():
+                el = elements[0]
+                break
+        except Exception:
+            continue
+
+    if not el:
+        log(f"  [FAIL] Could not locate the '{field_name}' input field.")
+        return False
+
     try:
-        el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+        time.sleep(1)
         el.click()
-        time.sleep(random.randint(0,5))
-        el.clear()
+        time.sleep(1)
+
+        # Clear existing text (e.g. Singapore) using BACKSPACE simulation for React inputs
+        from selenium.webdriver.common.keys import Keys
+        el.send_keys(Keys.CONTROL + "a")
+        el.send_keys(Keys.BACKSPACE)
+        time.sleep(0.5)
+
+        # Type character by character to trigger autocomplete dropdown
         for char in value:
             el.send_keys(char)
-            time.sleep(0.05)
+            time.sleep(0.08)
 
-        first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
-        first_suggestion.click()
-        time.sleep(random.randint(0,5))
-        log(f"  [ok] {field_name} filled and first suggestion selected")
-        return True
-    except TimeoutException as e:
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
-        log(f"  [FAIL] Could not find '{field_name}' field or its suggestion dropdown (timed out).")
-        return False
+        time.sleep(2)  # Wait for API suggestions to populate
+
+        # Target suggestion options in Facebook's dropdown menu
+        suggestion_xpaths = [
+            '//ul[@role="listbox"]//li[1]',
+            '//div[@role="listbox"]//div[@role="option"][1]',
+            '//div[contains(@id, "typeahead")]//li[1]',
+            '//ul[contains(@class, "typeahead")]//li[1]'
+        ]
+
+        suggestion_element = None
+        for s_xpath in suggestion_xpaths:
+            try:
+                s_els = driver.find_elements(By.XPATH, s_xpath)
+                if s_els and s_els[0].is_displayed():
+                    suggestion_element = s_els[0]
+                    break
+            except Exception:
+                continue
+
+        if suggestion_element:
+            click_with_fallback(driver, suggestion_element)
+            time.sleep(2)
+            log(f"  [ok] {field_name} set to '{value}'")
+            return True
+        else:
+            log(f"  [FAIL] Suggestions dropdown did not appear for location '{value}'.")
+            return False
+
     except Exception as e:
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
-        log(f"  [FAIL] Error filling '{field_name}': {e}")
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"location_error.png"))
+        log(f"  [FAIL] Error setting {field_name}: {e}")
         return False
 
 
