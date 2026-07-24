@@ -269,6 +269,9 @@ jobs:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
           WEBSHARE_API_URL: ${{ secrets.WEBSHARE_API_URL }}
+          VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
+          PROXY_HOST: "127.0.0.1"
+          PROXY_PORT: "10808"
         run: python3 facebook_poster_bot.py
 
       # ── REBUILD ALERT & STEP ──
@@ -306,6 +309,9 @@ jobs:
         env:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+          VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
+          PROXY_HOST: "127.0.0.1"
+          PROXY_PORT: "10808"
         run: python3 facebook_poster_bot.py
 
       # ── ARTIFACTS & CACHE ──

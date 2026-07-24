@@ -25,6 +25,8 @@ import random
 # Config knobs you can override without touching code (handy for CI secrets)
 # --------------------------------------------------------------------------
 WEBSHARE_API_URL = os.environ.get("WEBSHARE_API_URL")
+PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
+PROXY_PORT = os.environ.get("PROXY_PORT", "10808")
 # WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE")
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -156,8 +158,9 @@ CONFIG = ListingConfig(
     photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number:02d}.png")],
 )
 
+
 def get_local_proxy() -> str:
-    return "socks5://127.0.0.1:10808"
+    return f"socks5://{PROXY_HOST}:{PROXY_PORT}"
 
 
 def get_webshare_proxy() -> str:
@@ -211,7 +214,8 @@ def build_driver(cfg: ListingConfig):
                 driver.get("https://google.com")
                 log("✅ Proxy connection successful! Proceeding to Facebook...")
                 return driver
-            except Exception:
+            except Exception as e:
+                driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
                 log(f"❌ Proxy unreachable (attempt {attempt + 1}/{max_attempts}). "
                     "Is the xray-core process running on 127.0.0.1:10808?")
                 driver.quit()
@@ -220,8 +224,8 @@ def build_driver(cfg: ListingConfig):
         except Exception as e:
             if "already in use" in str(e).lower():
                 sys.exit("❌ Chrome already running with this profile.")
+            driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
             log(f"⚠️ Driver init error on attempt {attempt + 1}: {e}")
-
     sys.exit("❌ Could not connect via local VLESS proxy after all attempts. "
               "Check that the Xray step ran successfully earlier in the workflow.")
 
@@ -256,13 +260,16 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
         set_text_via_js(driver, el, value)
         log(f"  [ok] {field_name} filled")
         return True
-    except TimeoutException:
+    except TimeoutException as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Could not find '{field_name}' field (timed out). "
             f"Facebook may have changed the page layout, or the form hasn't loaded that field yet.")
         return False
     except Exception as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error filling '{field_name}': {e}")
         return False
+
 
 
 def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
@@ -280,10 +287,12 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
         time.sleep(random.randint(0,5))
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
-    except TimeoutException:
+    except TimeoutException as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Could not find '{field_name}' field or its suggestion dropdown (timed out).")
         return False
     except Exception as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error filling '{field_name}': {e}")
         return False
 
@@ -313,13 +322,16 @@ def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) 
         log(f"  [debug] Dropdown opened but no known label matched. Options seen: {[o.text for o in all_opts]}")
         return False
 
-    except TimeoutException:
+    except TimeoutException as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log("  [FAIL] 'Property for sale or to let' dropdown not clickable in time.")
         return False
-    except ElementClickInterceptedException:
+    except ElementClickInterceptedException as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log("  [FAIL] Dropdown click was blocked by another element.")
         return False
     except Exception as e:
+        driver.save_screenshot(oos.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error selecting listing type: {e}")
         return False
 
