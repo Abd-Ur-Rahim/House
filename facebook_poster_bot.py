@@ -153,7 +153,7 @@ CONFIG = ListingConfig(
     description=(
         content
     ),
-    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-0{photo_number}.png")],
+    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number:02d}.png")],
 )
 
 def get_local_proxy() -> str:
@@ -340,7 +340,7 @@ def select_property_subtype(wait: WebDriverWait, driver: webdriver.Chrome, prope
             pass
 
         dropdown = wait.until(
-            EC.presence_of_element_located((By.XPATH, "//span[normalize-space()='Property type']/ancestor::*[@role='combobox'][1]"))
+            EC.presence_of_element_located((By.XPATH, "//span[normalize-space()='Property type' or normalize-space()='Type of property for rent']/ancestor::*[@role='combobox'][1]"))
         )
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", dropdown)
         time.sleep(0.5)
