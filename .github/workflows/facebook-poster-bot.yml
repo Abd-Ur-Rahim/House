@@ -204,9 +204,7 @@ jobs:
       - name: Create screenshots directory
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         run: mkdir -p screenshots
-
       - name: Start VLESS proxy client
-        if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         env:
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
         run: |
@@ -259,17 +257,10 @@ jobs:
               json.dump(config, f, indent=2)
           PYEOF
 
-          nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
-          sleep 3
-          echo "Xray started, testing connection..."
-          curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me || echo "⚠️ Proxy test failed"
-
-      - name: Verify xray is still running
-        if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
-        run: |
-          pgrep -a xray || echo "❌ xray is NOT running anymore"
-          cat xray.log 2>/dev/null || echo "no xray.log found"
-
+              nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
+              sleep 3
+              echo "Xray started, testing connection..."
+              curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me || echo "⚠️ Proxy test failed"
       - name: Run Facebook Poster Bot
         id: bot
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
@@ -279,10 +270,8 @@ jobs:
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
           WEBSHARE_API_URL: ${{ secrets.WEBSHARE_API_URL }}
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
-          PROXY_HOST: ${{ secrets.PROXY_HOST }}                                          
-          PROXY_PORT: ${{ secrets.PROXY_PORT }}                                          
-          PROXY_USER: ${{ secrets.PROXY_USER }}                                          
-          PROXY_PASS: ${{ secrets.PROXY_PASS }}                                          
+          PROXY_HOST: "127.0.0.1"
+          PROXY_PORT: "10808"
         run: python3 facebook_poster_bot.py
 
       # ── REBUILD ALERT & STEP ──
@@ -320,11 +309,10 @@ jobs:
         env:
           FB_EMAIL: ${{ secrets.FB_EMAIL }}
           FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+          WEBSHARE_API_URL: ${{ secrets.WEBSHARE_API_URL }}
           VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
-          PROXY_HOST: ${{ secrets.PROXY_HOST }}                                          
-          PROXY_PORT: ${{ secrets.PROXY_PORT }}                                         
-          PROXY_USER: ${{ secrets.PROXY_USER }}                                          
-          PROXY_PASS: ${{ secrets.PROXY_PASS }}                                         
+          PROXY_HOST: "127.0.0.1"
+          PROXY_PORT: "10808"
         run: python3 facebook_poster_bot.py
 
       # ── ARTIFACTS & CACHE ──
@@ -426,4 +414,4 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d "parse_mode=Markdown" \
-            -d "text=${MSG}"       
+            -d "text=${MSG}"
