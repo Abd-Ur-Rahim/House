@@ -155,7 +155,7 @@ CONFIG = ListingConfig(
     description=(
         content
     ),
-    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number:2d}.png")],
+    photo_paths=[os.path.join(base_dir, "poster","flyers",f"poster-{photo_number:02d}.png")],
 )
 
 def get_local_proxy() -> str:
