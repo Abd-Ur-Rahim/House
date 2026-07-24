@@ -9,7 +9,6 @@ from selenium.common.exceptions import (
     TimeoutException,
     ElementClickInterceptedException,
 )
-from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -153,13 +152,16 @@ def build_driver(cfg: ListingConfig):
 
     for attempt in range(max_attempts):
         try:
-            # Pass the proxy as a raw Chrome flag instead of SeleniumBase's
-            # proxy= parameter. proxy= triggers SeleniumBase's own
-            # auth-proxy-extension logic, which can hang Chrome's startup
-            # (never binding the debugger port) when combined with uc=True.
-            # A plain --proxy-server flag has no such auth-extension path.
-            options = ChromeOptions()
-            options.add_argument(f"--proxy-server=socks5://{proxy_addr}")
+            # Pass the proxy as a raw Chrome flag via SeleniumBase's
+            # chromium_arg parameter instead of proxy=. proxy= triggers
+            # SeleniumBase's own auth-proxy-extension logic, which can hang
+            # Chrome's startup (never binding the debugger port) when
+            # combined with uc=True. A plain --proxy-server flag has no such
+            # auth-extension path. NOTE: Driver() does NOT accept a raw
+            # options= kwarg — chromium_arg is the supported way to add
+            # extra command-line flags (comma-separated "arg1,arg2" string,
+            # no leading dashes needed).
+            chromium_arg = f"proxy-server=socks5://{proxy_addr}"
 
             # NOTE: uc=True (undetected-chromedriver) is unreliable with
             # headless=True — the debugger port frequently never comes up
@@ -172,7 +174,7 @@ def build_driver(cfg: ListingConfig):
                 headless2=True,
                 user_data_dir=cfg.fb_profile,
                 block_images=True,
-                options=options,
+                chromium_arg=chromium_arg,
             )
 
             driver.set_page_load_timeout(20)
