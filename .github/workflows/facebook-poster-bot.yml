@@ -205,46 +205,62 @@ jobs:
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         run: mkdir -p screenshots
       - name: Start VLESS proxy client
+        env:
+          VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
         run: |
           wget -q https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
           unzip -q Xray-linux-64.zip -d xray
-          cat > xray/config.json << 'EOF'
-          {
-            "inbounds": [{
-              "port": 10808,
-              "listen": "127.0.0.1",
-              "protocol": "socks",
-              "settings": { "udp": true }
-            }],
-            "outbounds": [{
-              "protocol": "vless",
-              "settings": {
-                "vnext": [{
-                  "address": "129.150.62.91",
-                  "port": 443,
-                  "users": [{
-                    "id": "aa321a1e-2dd7-497f-bd2b-37105e2c639b",
-                    "flow": "xtls-rprx-vision",
-                    "encryption": "none"
-                  }]
-                }]
-              },
-              "streamSettings": {
-                "network": "tcp",
-                "security": "reality",
-                "realitySettings": {
-                  "serverName": "facebook.com",
-                  "fingerprint": "chrome",
-                  "publicKey": "2JSA8EbCZoSz0W8bvkutU8FOp9DepyPnVLYNs8atqys",
-                  "shortId": "ad86f8f1"
-                }
-              }
-            }]
+
+          python3 - << 'PYEOF'
+          import os
+          import json
+          from urllib.parse import urlparse, parse_qs
+
+          url = os.environ["VLESS_URL"]
+          parsed = urlparse(url)
+          qs = parse_qs(parsed.query)
+
+          config = {
+              "inbounds": [{
+                  "port": 10808,
+                  "listen": "127.0.0.1",
+                  "protocol": "socks",
+                  "settings": {"udp": True}
+              }],
+              "outbounds": [{
+                  "protocol": "vless",
+                  "settings": {
+                      "vnext": [{
+                          "address": parsed.hostname,
+                          "port": parsed.port,
+                          "users": [{
+                              "id": parsed.username,
+                              "flow": qs.get("flow", [""])[0],
+                              "encryption": qs.get("encryption", ["none"])[0]
+                          }]
+                      }]
+                  },
+                  "streamSettings": {
+                      "network": qs.get("type", ["tcp"])[0],
+                      "security": qs.get("security", ["reality"])[0],
+                      "realitySettings": {
+                          "serverName": qs.get("sni", [""])[0],
+                          "fingerprint": qs.get("fp", [""])[0],
+                          "publicKey": qs.get("pbk", [""])[0],
+                          "shortId": qs.get("sid", [""])[0]
+                      }
+                  }
+              }]
           }
-          EOF
-          nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
-          sleep 3
-          echo "Xray started"
+
+          with open("xray/config.json", "w") as f:
+              json.dump(config, f, indent=2)
+          PYEOF
+
+              nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
+              sleep 3
+              echo "Xray started, testing connection..."
+              curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me || echo "⚠️ Proxy test failed"
       - name: Run Facebook Poster Bot
         id: bot
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'

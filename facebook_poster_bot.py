@@ -157,7 +157,6 @@ CONFIG = ListingConfig(
 )
 
 def get_local_proxy() -> str:
-    """Uses the local xray-core SOCKS5 listener instead of Webshare."""
     return "socks5://127.0.0.1:10808"
 
 
@@ -196,54 +195,35 @@ def get_webshare_proxy() -> str:
 
 def build_driver(cfg: ListingConfig):
     if not os.path.isdir(cfg.fb_profile):
-        sys.exit(
-            f"Chrome profile directory not found:\n  {cfg.fb_profile}\n"
-            "Run facebook_profile_initializer.py once first to log in."
-        )
+        sys.exit(...)
 
+    proxy_string = get_local_proxy()  # fetch once — retrying won't change it
     max_attempts = 3
-    
+
     for attempt in range(max_attempts):
-        proxy_string = get_local_proxy()
-        
-        if not proxy_string:
-            log("➡️ Proceeding without a proxy (using the runner's own IP)...")
-            proxy_string = None # Let it run normally if proxy fails
-        else:
-            log(f"📡 Attempt {attempt + 1}/{max_attempts}: testing Webshare proxy...")
-
         try:
-            # 🚀 Switch from webdriver.Chrome to SeleniumBase Driver!
-            # It automatically bypasses bot detection AND handles proxy passwords
             driver = Driver(
-                browser="chrome",
-                uc=True,                  # Undetected mode (bypasses Facebook bot checks)
-                headless=True,            # Runs invisibly in GitHub Actions
-                user_data_dir=cfg.fb_profile,
-                proxy=proxy_string,      # Automatically handles User:Pass!
-                block_images=True 
-               )
-
-            # Give it a quick test to make sure the proxy connects
+                browser="chrome", uc=True, headless=True,
+                user_data_dir=cfg.fb_profile, proxy=proxy_string, block_images=True,
+            )
             driver.set_page_load_timeout(15)
-            if proxy_string:
-                try:
-                    driver.get("https://google.com")
-                    log("✅ Proxy connection successful! Proceeding to Facebook...")
-                    return driver
-                except Exception:
-                    log("❌ Selected proxy timed out. Retrying with a different one...")
-                    driver.quit()
-                    continue
-            
-            return driver
-
+            try:
+                driver.get("https://google.com")
+                log("✅ Proxy connection successful! Proceeding to Facebook...")
+                return driver
+            except Exception:
+                log(f"❌ Proxy unreachable (attempt {attempt + 1}/{max_attempts}). "
+                    "Is the xray-core process running on 127.0.0.1:10808?")
+                driver.quit()
+                time.sleep(3)  # give xray a moment in case it's still starting up
+                continue
         except Exception as e:
             if "already in use" in str(e).lower():
-                sys.exit("❌ Chrome is already running with this profile. Close other Chrome windows.")
-            log(f"⚠️ Driver initialization error on attempt {attempt + 1}: {e}")
+                sys.exit("❌ Chrome already running with this profile.")
+            log(f"⚠️ Driver init error on attempt {attempt + 1}: {e}")
 
-    sys.exit("❌ All connection attempts failed. Script terminated.")
+    sys.exit("❌ Could not connect via local VLESS proxy after all attempts. "
+              "Check that the Xray step ran successfully earlier in the workflow.")
 
 
 def set_text_via_js(driver: webdriver.Chrome, element, text: str) -> None:
@@ -549,7 +529,7 @@ def main() -> int:
             )
 
             log("Step 1: Listing type")
-            results["listing_type"] = select_listing_type_for_sale(wait, driver)
+            results["listing_type"] = select_listing_type_for_rent(wait, driver)
             time.sleep(2.5)
 
             log("Step 1b: Property type")
