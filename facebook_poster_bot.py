@@ -23,23 +23,22 @@ import random
 # --------------------------------------------------------------------------
 
 WEBSHARE_API_URL = os.environ.get("WEBSHARE_API_URL")
-# PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
-# PROXY_PORT = os.environ.get("PROXY_PORT", "10808")
-# WHATSAPP_NOTIFY_PHONE = os.environ.get("WHATSAPP_NOTIFY_PHONE")
 PROXY_HOST = os.environ.get("PROXY_HOST")
 PROXY_PORT = os.environ.get("PROXY_PORT")
 PROXY_USER = os.environ.get("PROXY_USER")
 PROXY_PASS = os.environ.get("PROXY_PASS")
-
-
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_timezone = pytz.timezone("Asia/Colombo")
 photo_number = random.randint(1, 10)
 description_number = random.randint(1, 10)
 
-with open(os.path.join(base_dir, 'poster', 'descriptions', f'{description_number}.txt'), 'r', encoding="utf-8") as file:
-    content = file.read()
+desc_path = os.path.join(base_dir, 'poster', 'descriptions', f'{description_number}.txt')
+if os.path.exists(desc_path):
+    with open(desc_path, 'r', encoding="utf-8") as file:
+        content = file.read()
+else:
+    content = "Property listing description."
 
 
 def log(msg: str) -> None:
@@ -49,10 +48,7 @@ def log(msg: str) -> None:
 
 
 def wait_until(condition_fn, timeout: int = 60, poll_interval: float = 2.0, description: str = "condition") -> bool:
-    """Bounded polling helper. Replaces bare `while True:` loops that could
-    hang forever if a page never reaches the expected state.
-    Returns True if condition_fn() returned truthy before the timeout.
-    Raises TimeoutError otherwise."""
+    """Bounded polling helper."""
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -65,15 +61,12 @@ def wait_until(condition_fn, timeout: int = 60, poll_interval: float = 2.0, desc
 
 
 def write_github_output(**kwargs) -> None:
-    """Writes key=value pairs to GITHUB_OUTPUT so the workflow step can
-    read them via steps.<id>.outputs.<key>. No-ops locally (outside CI)
-    where GITHUB_OUTPUT isn't set."""
+    """Writes key=value pairs to GITHUB_OUTPUT."""
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
         return
     with open(output_path, "a", encoding="utf-8") as f:
         for key, value in kwargs.items():
-            # Flatten to one line — GITHUB_OUTPUT doesn't handle raw newlines safely
             safe_value = str(value).replace("\n", " ").replace("\r", "")
             f.write(f"{key}={safe_value}\n")
 
@@ -97,32 +90,25 @@ CONFIG = ListingConfig(
     number_of_bathrooms="2",
     price="5000",
     location="Wilson Street, 12 Colombo, Sri Lanka",
-    description=(
-        content
-    ),
-    # Zero-padded to always match e.g. poster-01.png ... poster-10.png.
-    # Previously f"poster-0{photo_number}.png" produced "poster-010.png"
-    # when photo_number == 10, silently failing the upload check.
+    description=content,
     photo_paths=[os.path.join(base_dir, "poster", "flyers", f"poster-{photo_number:02d}.png")],
 )
 
 
 def get_local_proxy() -> str:
-    """Local xray-core SOCKS5 listener (started earlier in the workflow),
-    tunneling through the VLESS/Reality proxy. Host/port are read from env
-    so they can be changed without touching code."""
     return f"socks5://{PROXY_HOST}:{PROXY_PORT}"
 
+
 def get_owl_proxy() -> str:
-    """Formats the OwlProxy string for SeleniumBase."""
+    """Formats the Proxy string for SeleniumBase with socks5 scheme."""
     if PROXY_USER and PROXY_PASS:
-        return f"{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
-    return f"{PROXY_HOST}:{PROXY_PORT}"
+        return f"{PROXY_USER}:{PROXY_PASS}@socks5://{PROXY_HOST}:{PROXY_PORT}"
+    if PROXY_HOST and PROXY_PORT:
+        return f"socks5://{PROXY_HOST}:{PROXY_PORT}"
+    return ""
+
 
 def get_webshare_proxy() -> str:
-    """Fetches your private proxies from Webshare and formats them for SeleniumBase.
-    Currently unused in build_driver() (VLESS/local proxy is used instead) but
-    kept available as a fallback option."""
     if not WEBSHARE_API_URL:
         log("⚠️ No WEBSHARE_API_URL found in environment variables.")
         return ""
@@ -140,7 +126,7 @@ def get_webshare_proxy() -> str:
 
                 if len(parts) == 4:
                     ip, port, user, password = parts
-                    formatted_proxy = f"{user}:{password}@{ip}:{port}"
+                    formatted_proxy = f"{user}:{password}@socks5://{ip}:{port}"
                     log(f"✅ Successfully loaded Webshare proxy: {ip}:{port}")
                     return formatted_proxy
                 else:
@@ -159,7 +145,6 @@ def build_driver(cfg: ListingConfig):
             "Run facebook_profile_initializer.py once first to log in."
         )
 
-    # Use SeleniumBase native proxy parameter which handles SOCKS5 auth
     proxy_string = get_owl_proxy()
     max_attempts = 3
 
@@ -173,14 +158,15 @@ def build_driver(cfg: ListingConfig):
                 headless2=True,
                 user_data_dir=cfg.fb_profile,
                 block_images=True,
-                proxy=proxy_string,  # <-- SeleniumBase auto-handles SOCKS5 + Credentials
+                proxy=proxy_string if proxy_string else None,
             )
 
-            driver.set_page_load_timeout(30)
+            driver.set_page_load_timeout(35)
             try:
-                driver.get("https://ifconfig.me")
+                driver.get("https://api.ipify.org?format=json")
+                time.sleep(1)
                 ip = driver.find_element(By.TAG_NAME, "body").text.strip()
-                log(f"✅ Proxy connection successful! Public IP: {ip}. Proceeding to Facebook...")
+                log(f"✅ Proxy connection successful! Public IP Response: {ip}. Proceeding to Facebook...")
                 return driver
             except Exception as e:
                 log(f"❌ Proxy test failed on attempt {attempt + 1}/{max_attempts}: {e}")
@@ -198,11 +184,6 @@ def build_driver(cfg: ListingConfig):
 
 
 def set_text_via_js(driver: webdriver.Chrome, element, text: str) -> None:
-    """Set a textarea/input's value via JS, using the native value setter so
-    React (which controls Facebook's form) picks up the change. This bypasses
-    ChromeDriver's send_keys(), which cannot transmit characters outside the
-    Basic Multilingual Plane (most emoji) and throws
-    'unknown error: ChromeDriver only supports characters in the BMP'."""
     tag = element.tag_name.lower()
     setter_class = "HTMLTextAreaElement" if tag == "textarea" else "HTMLInputElement"
     driver.execute_script(
@@ -223,13 +204,12 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
     try:
         el = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
         el.click()
-        time.sleep(random.randint(0, 5))
+        time.sleep(random.randint(0, 2))
         set_text_via_js(driver, el, value)
         log(f"  [ok] {field_name} filled")
         return True
     except TimeoutException:
-        log(f"  [FAIL] Could not find '{field_name}' field (timed out). "
-            f"Facebook may have changed the page layout, or the form hasn't loaded that field yet.")
+        log(f"  [FAIL] Could not find '{field_name}' field (timed out).")
         return False
     except Exception as e:
         log(f"  [FAIL] Error filling '{field_name}': {e}")
@@ -240,7 +220,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
     try:
         el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
         el.click()
-        time.sleep(random.randint(0, 5))
+        time.sleep(1)
         el.clear()
         for char in value:
             el.send_keys(char)
@@ -248,7 +228,7 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
 
         first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
         first_suggestion.click()
-        time.sleep(random.randint(0, 5))
+        time.sleep(1)
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
     except TimeoutException:
@@ -260,10 +240,6 @@ def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath
 
 
 def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) -> bool:
-    # Variant A: some renders of /marketplace/create/rental skip this
-    # dropdown entirely and go straight into rental-specific fields.
-    # Use find_elements (non-blocking) instead of wait.until so we don't
-    # burn the full timeout when the field simply isn't present.
     dropdown = driver.find_elements(
         By.XPATH, "//span[contains(text(), 'Property for sale or to let')]/ancestor::*[@role='combobox'][1]"
     )
@@ -271,7 +247,6 @@ def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) 
         log("  [skip] No sale/rent selector on this page variant — nothing to select.")
         return True
 
-    # Variant B: dropdown is present.
     try:
         dropdown = wait.until(
             EC.element_to_be_clickable(
@@ -288,14 +263,10 @@ def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) 
                 wait.until(
                     EC.element_to_be_clickable((By.XPATH, f"//div[@role='option']//span[normalize-space()='{label}']"))
                 ).click()
-                time.sleep(random.randint(0, 5))
+                time.sleep(1)
                 log(f"  [ok] Listing type set to '{label}'")
                 return True
 
-        # None of the "Rent" labels matched. This isn't necessarily a
-        # failure — some renders default to "For sale" and don't offer a
-        # separate rent option, which is fine since the rest of the form
-        # still submits correctly.
         all_opts = driver.find_elements(By.XPATH, "//div[@role='option']")
         seen = [o.text for o in all_opts]
         log(f"  [info] No 'Rent' option found (seen: {seen}). Leaving default selection as-is.")
@@ -316,7 +287,7 @@ def select_listing_type_for_rent(wait: WebDriverWait, driver: webdriver.Chrome) 
 def click_with_fallback(driver, element):
     try:
         element.click()
-        time.sleep(random.randint(0, 5))
+        time.sleep(1)
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
 
@@ -328,8 +299,6 @@ def select_property_subtype(wait: WebDriverWait, driver: webdriver.Chrome, prope
         except TimeoutException:
             pass
 
-        # Facebook renders this field's label differently depending on the
-        # page variant — handle all known label text in one XPath.
         label_xpath = (
             "//span[normalize-space()='Property type' "
             "or normalize-space()='Type of property for rent' "
@@ -393,11 +362,6 @@ def upload_photos(wait: WebDriverWait, photo_paths: list) -> bool:
 
 
 def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriverWait, state: str, max_next_clicks: int = 3) -> None:
-    """Clicks 'Next' as many times as the form requires (Facebook's
-    Marketplace flow sometimes has one review step, sometimes more),
-    waiting properly for each button instead of guessing with a fixed
-    sleep. Stops clicking Next once no more Next button appears, then
-    waits for and clicks Publish."""
     if state == 'Publish':
         for i in range(max_next_clicks):
             try:
@@ -414,21 +378,20 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
         )
+        os.makedirs(os.path.join(base_dir, "screenshots"), exist_ok=True)
         driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{state}_page.png"))
         click_with_fallback(driver, publish_or_Update_button)
-        log("  [ok] Clicked 'Publish'")
+        log(f"  [ok] Clicked '{state}'")
     except TimeoutException:
         raise TimeoutException(
-            f"Could not find '{state}' button after clicking through the form. "
-            "Facebook's form may have shown a validation error or an unexpected "
-            "extra step — check screenshots/Submission_page.png."
+            f"Could not find '{state}' button after clicking through the form."
         )
 
 
 def edit_previous_listing_if_present(driver: webdriver.Chrome, wait: WebDriverWait, cfg) -> None:
-    """edits the previous 'For Sale' listing so the hourly re-post doesn't
-    pile up duplicates. No-ops if there's nothing to edit."""
     edit_results = {}
+    os.makedirs(os.path.join(base_dir, "screenshots"), exist_ok=True)
+    
     nothing = driver.find_elements(by="xpath", value="//*[text()='When you start selling, your listings will appear here.']")
     driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page.png"))
     if nothing:
@@ -437,55 +400,44 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome, wait: WebDriverWa
 
     wait_until(
         lambda: driver.find_elements(by="xpath", value="//h1[contains(text(),'Selling')]"),
-        timeout=30,
+        timeout=15,
         description="'Selling' page to load",
     )
     log("Step 0: Editing previous listing")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step_s0.png"))
 
     more_options = driver.find_elements(by="xpath", value="(//div[@aria-label='More options for 4 beds 2 baths House'])[1]")
     if not more_options:
         log("  [skip] Could not locate the previous listing's options menu — skipping edit.")
         return True
     more_options[0].click()
-    time.sleep(3)
+    time.sleep(2)
     edit_button = wait.until(
         EC.element_to_be_clickable((By.XPATH, "//*[text()='Edit listing']"))
     )
     click_with_fallback(driver, edit_button)
 
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step0.png"))
-
     log("Step 1: Edit description")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step1.png"))
     wait_until(
         lambda: driver.find_elements(by="xpath", value="//*[text()='Edit listing']"),
-        timeout=20,
+        timeout=15,
         description="'Edit listing' menu item",
     )
-    textarea = driver.find_element(By.XPATH, "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea")
-    textarea.clear()
-    time.sleep(1)
+    
     edit_results["description"] = safe_fill(
         driver, wait, "//span[contains(text(), 'Rental description') or contains(text(), 'description')]/ancestor::label//textarea",
         cfg.description, "Description",
     )
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step1.png"))
 
     log("Step 2: Edit photos")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step2.png"))
     remove_pics = driver.find_elements(by="xpath", value='//div[@aria-label="Remove photo from listing"]//*[local-name()="svg"]')
     for remove_pic in remove_pics:
         remove_pic.click()
         time.sleep(1)
     edit_results["photos"] = upload_photos(wait, cfg.photo_paths)
 
-    # Abort before submitting an edit with no photo attached — Facebook
-    # will reject it at the final step anyway, and this saves the wasted
-    # click-through + submission attempt.
     if not edit_results["photos"]:
         log("❌ Aborting edit — required photo failed to upload.")
-        return
+        return False
 
     log("=" * 60)
     log("Step 3: Update")
@@ -494,63 +446,8 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome, wait: WebDriverWa
     for step, ok in edit_results.items():
         log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
     log("=" * 60)
+    return True
 
-    failed = [k for k, v in edit_results.items() if not v]
-    if failed:
-        log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
-    else:
-        log("All fields filled successfully edited.")
-    driver.save_screenshot(os.path.join(base_dir, "screenshots", "Edit_selling_page_step2.png"))
-    log("Previous listing edited.")
-def navigate_to_marketplace_via_ui(driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
-    """Navigates to Marketplace by clicking through the normal UI path
-    (home → Marketplace nav icon) instead of a direct driver.get() to a
-    deep URL. Mimics organic navigation, which may reduce automation
-    signals compared to hitting /marketplace/... directly."""
-    try:
-        driver.get("https://www.facebook.com/")
-        time.sleep(random.randint(2, 4))
-
-        marketplace_link = wait.until(
-            EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, '/marketplace') and @aria-label='Marketplace']"))
-        )
-        click_with_fallback(driver, marketplace_link)
-        time.sleep(random.randint(2, 4))
-        log("  [ok] Navigated to Marketplace via nav bar click.")
-        return True
-    except TimeoutException:
-        log("  [FAIL] Could not find Marketplace nav icon — falling back to direct URL.")
-        return False
-    except Exception as e:
-        log(f"  [FAIL] Error navigating to Marketplace via UI: {e}")
-        return False
-
-
-def click_create_new_listing(driver: webdriver.Chrome, wait: WebDriverWait) -> bool:
-    """Clicks 'Create new listing' from the Marketplace home page,
-    then selects the rental/property listing type, instead of jumping
-    straight to /marketplace/create/rental."""
-    try:
-        create_button = wait.until(
-            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Create new listing')]"))
-        )
-        click_with_fallback(driver, create_button)
-        time.sleep(random.randint(2, 4))
-
-        # This usually opens a category picker (Item, Vehicle, Property Rental, etc.)
-        property_option = wait.until(
-            EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Property for rent') or contains(text(),'Property Rental') or contains(text(),'Home')]"))
-        )
-        click_with_fallback(driver, property_option)
-        time.sleep(random.randint(2, 4))
-        log("  [ok] Clicked through to the rental listing creation form.")
-        return True
-    except TimeoutException:
-        log("  [FAIL] Could not find 'Create new listing' / property category option.")
-        return False
-    except Exception as e:
-        log(f"  [FAIL] Error clicking through to create listing: {e}")
-        return False
 
 def main() -> int:
     cfg = CONFIG
@@ -562,10 +459,10 @@ def main() -> int:
 
     try:
         driver.get("https://web.facebook.com/marketplace/you/selling?_rdc=1&_rdr#")
-        driver.get("https://web.facebook.com/marketplace/create/rental")
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", "rental_page.png"))
+        time.sleep(3)
+        
         if "login" in driver.current_url.lower():
-            log("❌ Redirected to login page. Session expired or invalid. Requesting profile rebuild...")
+            log("❌ Redirected to login page. Session expired or invalid.")
             sys.exit(99)
 
         try:
@@ -573,22 +470,23 @@ def main() -> int:
         except TimeoutError as e:
             log(f"⚠️ {e} — continuing to create the new listing anyway.")
             nothing = True
+
         if nothing:
             driver.get("https://web.facebook.com/marketplace/create/rental")
+            os.makedirs(os.path.join(base_dir, "screenshots"), exist_ok=True)
             driver.save_screenshot(os.path.join(base_dir, "screenshots", "rental_page.png"))
+            
             wait_until(
-                lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Number of bedrooms')]"),
+                lambda: driver.find_elements(by="xpath", value="//span[contains(text(),'Number of bedrooms')] or //input"),
                 timeout=30,
                 description="marketplace 'create rental' form to load",
             )
 
             log("Step 1: Listing type")
             results["listing_type"] = select_listing_type_for_rent(wait, driver)
-            time.sleep(2.5)
 
             log("Step 1b: Property type")
             results["property_type"] = select_property_subtype(wait, driver, cfg.property_type)
-            time.sleep(2.5)
 
             log("Step 2: Number of bedrooms")
             results["number_of_bedrooms"] = safe_fill(
@@ -623,9 +521,6 @@ def main() -> int:
             log("Step 7: Photos")
             results["photos"] = upload_photos(wait, cfg.photo_paths)
 
-            # Abort before submitting — Facebook rejects the form with no
-            # photo attached at the final step anyway, wasting the full
-            # click-through/publish attempt and leaving a misleading log.
             if not results["photos"]:
                 log("❌ Aborting — required photo failed to upload. Not attempting submission.")
                 raise RuntimeError("Photo upload failed; aborting before submission.")
@@ -639,16 +534,10 @@ def main() -> int:
                 log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
             log("=" * 60)
 
-            failed = [k for k, v in results.items() if not v]
-            if failed:
-                log(f"{len(failed)} field(s) need manual attention: {', '.join(failed)}")
-            else:
-                log("All fields filled successfully.")
-
         try:
             wait_until(
                 lambda: driver.find_elements(by="xpath", value="//h1[contains(text(),'Selling')]"),
-                timeout=60,
+                timeout=30,
                 description="listing to finish publishing",
             )
             succeeded = True
@@ -662,9 +551,10 @@ def main() -> int:
         log(f"❌ Unhandled error: {e}")
     finally:
         try:
+            os.makedirs(os.path.join(base_dir, "screenshots"), exist_ok=True)
             driver.save_screenshot(os.path.join(base_dir, "screenshots", "Submission_page.png"))
         except Exception as e:
-            log(f"⚠️ Could not save final screenshot (Browser might be closed): {e}")
+            log(f"⚠️ Could not save final screenshot: {e}")
 
         try:
             driver.quit()
