@@ -69,7 +69,7 @@ TARGET_GROUPS = [
     "house and land sale නිවාස ඉඩකඩම් විකිනීමට"
 ]
 
-def cross_post_with_smart_fallback(driver: webdriver.Chrome, target_group_names: list, final_target_count: int = 20) -> int:
+def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names: list, final_target_count: int = 20) -> int:
     """
     Selects groups from a specific list first. If any are missing,
     it automatically clicks remaining available groups to guarantee 
