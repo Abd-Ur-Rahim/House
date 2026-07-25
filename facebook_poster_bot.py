@@ -69,7 +69,7 @@ TARGET_GROUPS = [
     "house and land sale නිවාස ඉඩකඩම් විකිනීමට"
 ]
 
-def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names: list, final_target_count: int = 20) -> int:
+def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names: list , final_target_count: int = 20) -> int:
     """
     Selects groups from a specific list first. If any are missing,
     it automatically clicks remaining available groups to guarantee 
@@ -593,7 +593,7 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
             click_with_fallback(driver, next_button)
             log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
             time.sleep(2)
-        auto_crosspost_to_target_groups(driver,selected_groups)
+        auto_crosspost_to_target_groups(driver,target_group_names= selected_groups)
     try:
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
