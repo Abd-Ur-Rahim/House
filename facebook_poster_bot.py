@@ -290,7 +290,7 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
         return False
 
 
-def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, value: str, field_name: str) -> bool:
+def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
     # XPaths to locate Facebook Marketplace Location input across different UI versions
     location_xpaths = [
         "//label[@aria-label='Location']//input",
