@@ -317,7 +317,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="500",
+    price="50",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         content
@@ -768,9 +768,9 @@ def main() -> int:
             log("Step 7: Photos")
             results["photos"] = upload_photos(wait, cfg.photo_paths)
             
-            # log("Click the anonymous button")
-            # anonymous_btn=driver.find_element(by='xpath', value="(//span[contains(text(),'anyone')  or contains(text(),'anonymously')])[1]")
-            # anonymous_btn.click()
+            log("Click the anonymous button")
+            anonymous_btn=driver.find_element(by='xpath', value="(//span[contains(text(),'anyone')  or contains(text(),'anonymously')])[1]")
+            anonymous_btn.click()
 
             log("Step 8: Submission")
             count = min(20, len(TARGET_GROUPS))
