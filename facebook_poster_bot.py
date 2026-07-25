@@ -745,6 +745,7 @@ def main() -> int:
             results["price"] = safe_fill(
                 driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
             )
+            driver.save_screenshot(os.path.join(base_dir, "screenshots", "price.png"))
 
             log("Step 7: Photos")
             results["photos"] = upload_photos(wait, cfg.photo_paths)
