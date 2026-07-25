@@ -7,6 +7,7 @@ from datetime import datetime
 from selenium import webdriver
 from selenium.common.exceptions import (
     TimeoutException,
+    StaleElementReferenceException,
     ElementClickInterceptedException,
 )
 from selenium.webdriver.common.by import By
@@ -33,7 +34,76 @@ description_number = random.randint(1, 10)
 
 with open(os.path.join(base_dir,'poster','descriptions',f'{description_number}.txt'),'r',encoding="utf-8") as file:
     content = file.read()
+TARGET_GROUPS = [
+    "Kolonnawa / Dematagoda / Wellampitiya Community",
+    "Colombo Rent houses Apartment Annex",
+    "House Rent for Around Colombo - කුලියට නිවසක් කොළඹ අවටින්",
+    "wattala house for sale and rent",
+    "House, Rooms & Annex for Rent - ඉක්මනින් නිවාස කුලියට",
+    "Colombo Apartments - Rent",
+    "කුලියට නිවසක් :: house for rent",
+    "House for rent in kolonnawa",
+    "House, Annex & Rooms For Rent - ඉක්මනින් හොයාගන්න",
+    "බත්තරමුල්ල කුලී ගෙවල් - Battaramulla Rent Home or Annex",
+    "House for rent wattala",
+    "Sri Lanka Land & Property Exchange",
+    "Rent/sale/lease/buy/kolonnawa/ Colombo/Houses",
+    "ඉඩම් ගෙවල් විකිනීම කුලියට දීම Gewal idam selling rent home",
+    "ඉඩම් ගෙවල් වාහන ලාභෙට Land | House | Vehicle for Sale Sri Lanka 🇱🇰",
+    "Houses for Rent - කුලියට ගෙයක්",
+    "කලුතර / කොළඹ / ගම්පහ ඉඩම් හා නිවාස - House & Land for sale",
+    "නිවාස 🏠️,ඉඩම්,🏘️House,🏡️Lands අඩුවට කුලියට,බද්දට,විකිනීමට",
+    "ikman.lk (Rent & Lease & Sale Property)",
+    "Land and House for Sale to Buy ඉඩම් සහ නිවාස විකිණීමට මිලදී ගැනීමට",
+    "Ceylon Property Hub 🏘️ | Buy • Sell • Rent | නිවාස ඉඩකඩම් විකිණීමට",
+    "නිවාස ඉඩම් ව්කිනිමට කුලියට දිමට සහ ගැනිමට සොයන්නො",
+    "House Lease and Rent in Colombo",
+    "dematagoda/maradana/maligawatta/grandpass/borella/kotahena/modara/narahenpi",
+    "House For Sale.. මන්දිරය නිවාස .... ඔබේ නිවස සොයාගන්න...",
+    "ඉඩම් සහ ගෙවල් විකිණීමට - Lands and Houses for Sale",
+    "NEGOMBO HOUSE / LANDS FOR SALE",
+    "කුලියට නිවසක් | House For Rent - Sri Lanka",
+    "Dehiwala - Mount Lavinia Community දෙහිවල ගල්කිස්ස අපි",
+    "නිවාස සහ ඉඩම් විකිණී⁣මේ සහ මිලදී ගැනීමේ සමූහය-Real Estate In Sri Lanka",
+    "house and land sale නිවාස ඉඩකඩම් විකිනීමට"
+]
 
+def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names: list) -> int:
+    """
+    Selects group checkboxes matching a specific list of group names
+    during the Marketplace 'List in More Places' step.
+    """
+    selected_count = 0
+    time.sleep(2)  # Allow modal/list to populate
+
+    for group_name in target_group_names:
+        # Locate checkbox container matching the specific group name
+        xpath = f"//span[contains(text(), '{group_name}')]/ancestor::div[@role='checkbox' or contains(@class, 'x1n2onr6')]"
+        
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+            if elements:
+                group_item = elements[0]
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", group_item)
+                time.sleep(0.3)
+                
+                # Click to toggle checkbox
+                try:
+                    group_item.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", group_item)
+                
+                selected_count += 1
+                log(f"  [ok] Auto-selected group: {group_name}")
+                time.sleep(0.5)
+            else:
+                log(f"  [skip] Could not find group: {group_name}")
+        except StaleElementReferenceException:
+            continue
+        except Exception as e:
+            log(f"  [FAIL] Error selecting group '{group_name}': {e}")
+
+    return selected_count
 def log(msg: str) -> None:
     """Timestamped print so CI logs are easy to correlate with real time."""
     stamp = datetime.now(local_timezone).strftime("%H:%M:%S")
@@ -147,7 +217,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="5000",
+    price="500",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         content
@@ -422,7 +492,7 @@ def upload_photos(wait: WebDriverWait, photo_paths: list) -> bool:
         return False
 
 
-def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriverWait,state:str, max_next_clicks: int = 3) -> None:
+def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriverWait,state:str ='Update', max_next_clicks: int = 3,selected_groups: list = []) -> None:
     """Clicks 'Next' as many times as the form requires (Facebook's
     Marketplace flow sometimes has one review step, sometimes more),
     waiting properly for each button instead of guessing with a fixed
@@ -440,6 +510,7 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
             click_with_fallback(driver, next_button)
             log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
             time.sleep(2)
+        auto_crosspost_to_target_groups(driver,selected_groups)
     try:
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
@@ -511,7 +582,8 @@ def edit_previous_listing_if_present(driver: webdriver.Chrome,wait: WebDriverWai
 
     log("=" * 60)
     log("Step 3: Update")
-    click_through_to_publish_or_update(driver, wait,'Update')
+
+    click_through_to_publish_or_update(driver, wait)
     log("SUMMARY")
     for step, ok in edit_results.items():
         log(f"  {'OK  ' if ok else 'FAIL'} - {step}")
@@ -596,8 +668,9 @@ def main() -> int:
             results["photos"] = upload_photos(wait, cfg.photo_paths)
 
             log("Step 8: Submission")
-            click_through_to_publish_or_update(driver, wait,'Publish')
-
+            count = min(20, len(TARGET_GROUPS))
+            selected_groups =random.sample(TARGET_GROUPS,k=count)
+            click_through_to_publish_or_update(driver, wait,'Publish',selected_groups=selected_groups)
             log("=" * 60)
             log("SUMMARY")
             for step, ok in results.items():
@@ -642,6 +715,7 @@ def main() -> int:
         status_label = "published" if succeeded else "FAILED to publish"
 
         write_github_output(
+            selected_groups =selected_groups,
             poster_number=photo_number,
             published_time=published_time,
             status=status_label,

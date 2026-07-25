@@ -395,12 +395,13 @@ jobs:
         run: |
           POSTER="${{ steps.bot_retry.outputs.poster_number || steps.bot.outputs.poster_number || 'unknown' }}"
           TIME="${{ steps.bot_retry.outputs.published_time || steps.bot.outputs.published_time || 'unknown time' }}"
+          GROUPS="${{ steps.bot_retry.outputs.selected_groups || steps.bot.outputs.selected_groups || 'unknown groups' }}"
           STATUS="${{ steps.bot_retry.outputs.status || steps.bot.outputs.status || 'unknown status' }}"
 
           if [ "${{ steps.gatekeeper.outputs.proceed }}" = "false" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             MSG="⏭️ *Facebook Poster Bot:* Run skipped by priority matrix (daily cap reached or slot reserved)."
           elif [ "${{ job.status }}" = "success" ]; then
-            MSG="✅ *Facebook Poster Bot:* poster-${POSTER} — ${STATUS} at ${TIME}"
+            MSG="✅ *Facebook Poster Bot:* poster-${POSTER} — ${STATUS} at ${TIME} to these groups ${GROUPS}"
           else
             MSG="❌ *Facebook Poster Bot:* Execution failed. Last known: poster-${POSTER}, ${STATUS} at ${TIME}"
           fi
