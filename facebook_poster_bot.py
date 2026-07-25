@@ -749,6 +749,10 @@ def main() -> int:
 
             log("Step 7: Photos")
             results["photos"] = upload_photos(wait, cfg.photo_paths)
+            
+            log("Click the anonymous button")
+            anonymous_btn=driver.find_element(by='xpath', value="(//span[contains(text(),'anyone')  or contains(text(),'anonymously')])[1]")
+            anonymous_btn.btn
 
             log("Step 8: Submission")
             count = min(20, len(TARGET_GROUPS))
