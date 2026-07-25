@@ -87,14 +87,31 @@ def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names
     # Generic row selector for Facebook group list items
     rows_xpath = "//div[@role='listitem' or @role='checkbox' or contains(@class, 'x1n2onr6')]"
     
-    # 1. Wait for the interface rows to render physically in the browser DOM
+    # ================= SMART DYNAMIC WAIT (MAX 10 SECONDS) =================
     try:
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, rows_xpath)))
-        time.sleep(1.5)
+        print("[*] Waiting for groups to render (Max 10s)...")
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, rows_xpath)))
+        time.sleep(1.0)  # Brief micro-buffer for list stability
+        print("[ok] Groups detected on screen. Commencing selection...")
     except TimeoutException:
-        print("[FAIL] Facebook group layout items failed to load in time.")
+        # ================= BLANK SCREEN SAFEGUARD FALLBACK =================
+        print("[!] Timeout: Groups failed to appear within 10 seconds (Blank panel detected).")
+        print("[*] Safeguard Mode: Skipping group selection and publishing directly...")
+        
+        try:
+            publish_btn_xpath = "//div[@role='button' and @aria-label='Publish'] | //span[text()='Publish']/ancestor::div[@role='button']"
+            publish_btn = driver.find_element(By.XPATH, publish_btn_xpath)
+            driver.execute_script("arguments.scrollIntoView({block: 'center'});", publish_btn)
+            time.sleep(0.5)
+            try:
+                publish_btn.click()
+            except Exception:
+                driver.execute_script("arguments.click();", publish_btn)
+            print("[ok] Safeguard Success: Listing submitted directly to Marketplace.")
+        except Exception as e:
+            print(f"[FAIL] Could not click final Publish button: {e}")
+            
         return 0
-
     # Locate the internal scrollable pane inside the modal wrapper
     try:
         scroll_container = driver.find_element(By.XPATH, "//div[@role='dialog']//div[contains(@class, 'x1r93jhi')]")
@@ -593,7 +610,7 @@ def click_through_to_publish_or_update(driver: webdriver.Chrome, wait: WebDriver
             click_with_fallback(driver, next_button)
             log(f"  [ok] Clicked 'Next' ({i + 1}/{max_next_clicks})")
             time.sleep(2)
-        auto_crosspost_to_target_groups(driver,target_group_names= selected_groups)
+        auto_crosspost_to_target_groups(driver,target_group_names=selected_groups)
     try:
         publish_or_Update_button = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, f"//span[contains(text(),'{state}')]"))
