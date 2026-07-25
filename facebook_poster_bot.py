@@ -7,16 +7,11 @@ from datetime import datetime
 from selenium import webdriver
 from selenium.common.exceptions import (
     TimeoutException,
-    StaleElementReferenceException,
     ElementClickInterceptedException,
 )
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 from seleniumbase import Driver
 import pytz
 import requests
@@ -294,85 +289,25 @@ def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: 
 
 def select_first_suggestion(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
     try:
-        # Helper to re-find input element safely without keeping stale references
-        def get_input():
-            return wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
-
-        # 1. Scroll & Focus Input
-        el = get_input()
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-        time.sleep(0.5)
-
-        # Retry clicking in case of initial interception/stale state
-        for _ in range(3):
-            try:
-                get_input().click()
-                break
-            except (StaleElementReferenceException, ElementClickInterceptedException):
-                time.sleep(0.5)
-
-        time.sleep(random.uniform(0.5, 1.5))
-
-        # 2. Clear using Backspace instead of .clear() (Prevents React DOM Detach)
-        el = get_input()
-        el.send_keys(Keys.CONTROL + "a")
-        el.send_keys(Keys.BACKSPACE)
-        time.sleep(0.3)
-
-        # 3. Type character-by-character with Stale Catch
+        el = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        el.click()
+        time.sleep(random.randint(0,5))
+        el.clear()
         for char in value:
-            try:
-                el.send_keys(char)
-            except StaleElementReferenceException:
-                el = get_input()
-                el.send_keys(char)
-            time.sleep(0.08)
-
-        # 4. Wait for Dropdown Suggestions to Render
-        time.sleep(2.5)
-
-        # Try multiple fallback xpaths for Facebook location suggestions
-        suggestion_xpaths = [
-            '//ul[@role="listbox"]//li[1]',
-            '//div[@role="listbox"]//div[@role="option"][1]',
-            '//ul[contains(@class, "typeahead")]//li[1]',
-            '//div[contains(@aria-label, "Location")]//ul/li[1]'
-        ]
-
-        suggestion_el = None
-        for s_xpath in suggestion_xpaths:
-            found = driver.find_elements(By.XPATH, s_xpath)
-            if found and found[0].is_displayed():
-                suggestion_el = found[0]
-                break
-
-        if not suggestion_el:
-            # Fallback attempt using standard Wait condition
-            suggestion_el = wait.until(
-                EC.visibility_of_element_located((By.XPATH, '//ul[@role="listbox"]//li[1]'))
-            )
-
-        # 5. Click the First Suggestion (handles stale click fallback)
-        try:
-            suggestion_el.click()
-        except (StaleElementReferenceException, ElementClickInterceptedException):
-            # Re-fetch the suggestion right before retry click
-            suggestion_el = driver.find_element(By.XPATH, '//ul[@role="listbox"]//li[1]')
-            driver.execute_script("arguments[0].click();", suggestion_el)
-
-        time.sleep(random.uniform(1.0, 2.5))
+            el.send_keys(char)
+            time.sleep(0.05)
+        time.sleep(3)
+        first_suggestion = wait.until(EC.element_to_be_clickable((By.XPATH, '//ul[@role="listbox"]//li[1]')))
+        first_suggestion.click()
+        time.sleep(random.randint(0,5))
         log(f"  [ok] {field_name} filled and first suggestion selected")
         return True
-
     except TimeoutException as e:
-        filename = f"{field_name.lower().replace(' ', '_')}_timeout.png"
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", filename))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Could not find '{field_name}' field or its suggestion dropdown (timed out).")
         return False
-
     except Exception as e:
-        filename = f"{field_name.lower().replace(' ', '_')}_error.png"
-        driver.save_screenshot(os.path.join(base_dir, "screenshots", filename))
+        driver.save_screenshot(os.path.join(base_dir, "screenshots", f"{e}.png"))
         log(f"  [FAIL] Error filling '{field_name}': {e}")
         return False
 
