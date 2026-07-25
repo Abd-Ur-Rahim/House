@@ -2,14 +2,22 @@ name: Facebook Poster Bot
 
 on:
   schedule:
-    # ── Peak windows (Original Strings Kept) ──
-    - cron: "0 6 * * 1-5"     # Special: Weekday lunch (Fires 11:30 AM SLT)
-    - cron: "5 13 * * 1-4"    # Special: Weekday evening (Fires 18:35 PM SLT)
-    - cron: "0 2 * * 6"       # Special: Saturday morning (Fires 07:30 AM SLT)
+    # ── Mon–Thu: Special Peak Windows ──
+    - cron: "0 6 * * 1-4"      # Weekday Lunch (11:30 AM SLT)
+    - cron: "5 13 * * 1-4"     # Weekday Evening (18:35 PM SLT)
 
-    # ── General everyday coverage (Original Strings Kept) ──
-    - cron: "0 3 * * *"       # General Anchor 1 (Fires 08:30 AM SLT)
-    - cron: "0 10 * * *"      # General Anchor 2 (Fires 15:30 PM SLT)
+    # ── Friday: 1 General Anchor + 1 Special Lunch ──
+    - cron: "0 3 * * 5"        # General Anchor 1 (08:30 AM SLT)
+    - cron: "0 6 * * 5"        # Weekday Lunch (11:30 AM SLT)
+
+    # ── Saturday: 1 Special Morning + 1 General Anchor ──
+    - cron: "0 2 * * 6"        # Saturday Morning Special (07:30 AM SLT)
+    - cron: "0 3 * * 6"        # General Anchor 1 (08:30 AM SLT)
+
+    # ── Sunday: 2 General Anchors ──
+    - cron: "0 3 * * 0"        # General Anchor 1 (08:30 AM SLT)
+    - cron: "0 10 * * 0"       # General Anchor 2 (15:30 PM SLT)
+
   workflow_dispatch: {}
 
 permissions:
@@ -38,7 +46,7 @@ jobs:
           echo "day=$SLT_DAY_OF_WEEK" >> $GITHUB_OUTPUT
 
           case "${{ github.event.schedule }}" in
-            "0 6 * * 1-5"|"5 13 * * 1-4"|"0 2 * * 6")
+            "0 6 * * 1-4"|"5 13 * * 1-4"|"0 6 * * 5"|"0 2 * * 6")
               echo "type=special" >> $GITHUB_OUTPUT ;;
             *)
               echo "type=general" >> $GITHUB_OUTPUT ;;
@@ -81,20 +89,11 @@ jobs:
 
             # Mon-Thu (2 Specials scheduled)
             if [ "$DAY" -le 4 ]; then
-              # 08:30 AM Anchor: Must skip because 2 specials are coming up later
-              # 15:30 PM Anchor: Lunch already ran (SPECIAL_RUNS=1). 1 Evening special remains.
-              # Since only 1 slot is left (TOTAL_RUNS=1), we must block this general to save it.
               TOTAL_EXPECTED_SPECIALS=2
 
             # Fri (1 Lunch Special scheduled)
             elif [ "$DAY" -eq 5 ]; then
-              if [ "$CRON_STR" = "0 3 * * *" ]; then
-                # 08:30 AM runs. 1 special is coming up, meaning 1 slot is safe for General.
-                TOTAL_EXPECTED_SPECIALS=1
-              else
-                # 15:30 PM Anchor. Lunch already ran or expired. No more specials.
-                TOTAL_EXPECTED_SPECIALS=1
-              fi
+              TOTAL_EXPECTED_SPECIALS=1
 
             # Sat (1 Morning Special scheduled)
             elif [ "$DAY" -eq 6 ]; then
@@ -145,23 +144,18 @@ jobs:
           exit 0
 
       # ── Everything below only runs if the gatekeeper authorized this trigger ──
-      # (workflow_dispatch always bypasses the gate; scheduled runs must have proceed == 'true')
 
-      # 6. Your Jitter Window Filter
+      # 6. Random delay (0 to 5 minutes)
       - name: Random delay within window
         if: github.event_name != 'schedule' || steps.gatekeeper.outputs.proceed == 'true'
         run: |
-          case "${{ github.event.schedule }}" in
-            "0 6 * * 1-5")   WINDOW_MINUTES=119 ;;
-            "5 13 * * 1-4")  WINDOW_MINUTES=179 ;;
-            "0 2 * * 6")     WINDOW_MINUTES=119 ;;
-            "0 3 * * *"|"0 10 * * *") WINDOW_MINUTES=119 ;;
-            *) WINDOW_MINUTES=0 ;;
-          esac
-
-          DELAY_SECONDS=$(( RANDOM % (WINDOW_MINUTES * 60 + 1) ))
-          echo "Sleeping ${DELAY_SECONDS}s (~$((DELAY_SECONDS/60)) min)"
-          sleep "$DELAY_SECONDS"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            DELAY_SECONDS=$(( RANDOM % 301 ))
+            echo "Sleeping ${DELAY_SECONDS}s (~$((DELAY_SECONDS/60)) min $((DELAY_SECONDS%60)) sec)"
+            sleep "$DELAY_SECONDS"
+          else
+            echo "Manual trigger (workflow_dispatch) — skipping delay."
+          fi
 
       - name: Restore Chrome login profiles from cache
         id: cache-restore
