@@ -646,9 +646,10 @@ def main() -> int:
                 cfg.number_of_bathrooms, "Number of bathrooms",
             )
 
-            log("Step 4: Price")
-            results["price"] = safe_fill(
-                driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
+            log("Step 4: Location")
+            results["location"] = select_first_suggestion(
+                driver, wait, "//input[@role='combobox' and @aria-autocomplete='list' and not(@placeholder)]",
+                cfg.location, "Location",
             )
 
             log("Step 5: Description")
@@ -658,10 +659,9 @@ def main() -> int:
                 cfg.description, "Description",
             )
 
-            log("Step 6: Location")
-            results["location"] = select_first_suggestion(
-                driver, wait, "//input[@role='combobox' and @aria-autocomplete='list' and not(@placeholder)]",
-                cfg.location, "Location",
+            log("Step 6: Price")
+            results["price"] = safe_fill(
+                driver, wait, "//span[contains(text(), 'Price')]/ancestor::label//input", cfg.price, "Price",
             )
 
             log("Step 7: Photos")
