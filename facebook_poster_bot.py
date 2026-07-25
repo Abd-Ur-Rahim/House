@@ -68,41 +68,123 @@ TARGET_GROUPS = [
     "house and land sale නිවාස ඉඩකඩම් විකිනීමට"
 ]
 
-def auto_crosspost_to_target_groups(driver: webdriver.Chrome, target_group_names: list) -> int:
+def cross_post_with_smart_fallback(driver: webdriver.Chrome, target_group_names: list, final_target_count: int = 20) -> int:
     """
-    Selects group checkboxes matching a specific list of group names
-    during the Marketplace 'List in More Places' step.
+    Selects groups from a specific list first. If any are missing,
+    it automatically clicks remaining available groups to guarantee 
+    exactly 20 total selections.
     """
     selected_count = 0
-    time.sleep(2)  # Allow modal/list to populate
+    clicked_element_ids = set()  # Prevent double-clicking individual row elements
+    already_selected_names = set()
+    
+    scroll_attempts = 0
+    max_scroll_attempts = 20
+    
+    print(f"[*] Initializing group selector. Aiming for exactly {final_target_count} groups...")
+    
+    # Generic row selector for Facebook group list items
+    rows_xpath = "//div[@role='listitem' or @role='checkbox' or contains(@class, 'x1n2onr6')]"
+    
+    # 1. Wait for the interface rows to render physically in the browser DOM
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, rows_xpath)))
+        time.sleep(1.5)
+    except TimeoutException:
+        print("[FAIL] Facebook group layout items failed to load in time.")
+        return 0
 
+    # Locate the internal scrollable pane inside the modal wrapper
+    try:
+        scroll_container = driver.find_element(By.XPATH, "//div[@role='dialog']//div[contains(@class, 'x1r93jhi')]")
+    except NoSuchElementException:
+        scroll_container = driver.find_element(By.TAG_NAME, "body")
+
+    # ================= PHASE 1: TARGET SPECIFIC LIST =================
+    print("[*] Phase 1: Searching for your specific listed groups...")
     for group_name in target_group_names:
-        # Locate checkbox container matching the specific group name
-        xpath = f"//span[contains(text(), '{group_name}')]/ancestor::div[@role='checkbox' or contains(@class, 'x1n2onr6')]"
+        if selected_count >= final_target_count:
+            break
+            
+        # Precise text match anchoring strategy
+        xpath = f"//span[text()='{group_name}']/ancestor::div[@role='listitem' or @role='checkbox' or contains(@class, 'x1n2onr6')]"
         
         try:
             elements = driver.find_elements(By.XPATH, xpath)
             if elements:
-                group_item = elements[0]
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", group_item)
-                time.sleep(0.3)
+                group_row = elements[0]
+                clicked_element_ids.add(group_row.id)  # Lock element ID for phase 2
                 
-                # Click to toggle checkbox
-                try:
-                    group_item.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", group_item)
+                checkbox_trigger = group_row.find_element(By.XPATH, ".//div[@role='checkbox'] | .//input")
+                is_checked = checkbox_trigger.get_attribute("aria-checked") == "true"
                 
-                selected_count += 1
-                log(f"  [ok] Auto-selected group: {group_name}")
-                time.sleep(0.5)
+                if not is_checked:
+                    driver.execute_script("arguments.scrollIntoView({block: 'center', behavior: 'smooth'});", checkbox_trigger)
+                    time.sleep(0.3)
+                    
+                    try:
+                        checkbox_trigger.click()
+                    except Exception:
+                        driver.execute_script("arguments.click();", checkbox_trigger)
+                        
+                    selected_count += 1
+                    print(f"  [+] Specific Match: '{group_name}' ({selected_count}/{final_target_count})")
+                    time.sleep(random.uniform(0.5, 0.8))
+                
+                already_selected_names.add(group_name)
             else:
-                log(f"  [skip] Could not find group: {group_name}")
+                # Scroll a fixed step to uncover lazy loading options if list target wasn't in frame
+                driver.execute_script("arguments.scrollTop += 300;", scroll_container)
+                time.sleep(0.8)
+                
         except StaleElementReferenceException:
             continue
-        except Exception as e:
-            log(f"  [FAIL] Error selecting group '{group_name}': {e}")
+        except Exception:
+            continue
 
+    # ================= PHASE 2: AUTO-FILL FALLBACK =================
+    if selected_count < final_target_count:
+        gap = final_target_count - selected_count
+        print(f"[!] Warning: Missing {gap} groups from your list. Activating auto-fill fallback...")
+        
+        while selected_count < final_target_count and scroll_attempts < max_scroll_attempts:
+            visible_rows = driver.find_elements(By.XPATH, rows_xpath)
+            
+            for row in visible_rows:
+                if selected_count >= final_target_count:
+                    break
+                    
+                if row.id in clicked_element_ids:
+                    continue  # Skip groups we already touched or processed in Phase 1
+                    
+                try:
+                    checkbox_trigger = row.find_element(By.XPATH, ".//div[@role='checkbox'] | .//input")
+                    is_checked = checkbox_trigger.get_attribute("aria-checked") == "true"
+                    
+                    if not is_checked:
+                        driver.execute_script("arguments.scrollIntoView({block: 'center'});", checkbox_trigger)
+                        time.sleep(0.3)
+                        
+                        try:
+                            checkbox_trigger.click()
+                        except Exception:
+                            driver.execute_script("arguments.click();", checkbox_trigger)
+                            
+                        selected_count += 1
+                        print(f"  [+] Fallback Selection: Group Row #{selected_count} ({selected_count}/{final_target_count})")
+                        time.sleep(random.uniform(0.5, 0.8))
+                        
+                    clicked_element_ids.add(row.id)
+                    
+                except Exception:
+                    continue
+            
+            # Scroll down to pull the next block of groups from the backend server
+            driver.execute_script("arguments.scrollTop += 450;", scroll_container)
+            time.sleep(1.8)
+            scroll_attempts += 1
+
+    print(f"[*] Finished. Total selected groups: {selected_count}/{final_target_count}")
     return selected_count
 def log(msg: str) -> None:
     """Timestamped print so CI logs are easy to correlate with real time."""
@@ -217,7 +299,7 @@ class ListingConfig:
 CONFIG = ListingConfig(
     number_of_bedrooms="4",
     number_of_bathrooms="2",
-    price="5",
+    price="500",
     location="Wilson Street, 12 Colombo, Sri Lanka",
     description=(
         content
