@@ -752,7 +752,7 @@ def main() -> int:
             
             log("Click the anonymous button")
             anonymous_btn=driver.find_element(by='xpath', value="(//span[contains(text(),'anyone')  or contains(text(),'anonymously')])[1]")
-            anonymous_btn.btn
+            anonymous_btn.click()
 
             log("Step 8: Submission")
             count = min(20, len(TARGET_GROUPS))
