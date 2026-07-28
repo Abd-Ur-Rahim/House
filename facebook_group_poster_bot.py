@@ -558,63 +558,63 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     # ── Step 4 · Submit (Post button inside dialog) ───────────────────
     log("  [4/4] Submitting post...")
-        post_btn_xpaths = [
-            "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
-            "//div[@role='dialog']//button[@aria-label='Post']",
-            "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Post']]",
-            "//div[@role='dialog']//button[.//span[normalize-space()='Post']]",
-            "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
-        ]
-        
-        post_btn = None
-        for xp in post_btn_xpaths:
-            try:
-                # Give it up to 30s in case large images take longer to process
-                post_btn = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, xp)))
-                log("  [ok] Post button found and enabled.")
-                break
-            except TimeoutException:
-                continue
-                
-        if not post_btn:
-            sc(driver, "post_btn_fail")
-            log("  [FAIL] Post button never became enabled (image upload may still be stuck).")
-            return False
+    post_btn_xpaths = [
+        "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
+        "//div[@role='dialog']//button[@aria-label='Post']",
+        "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Post']]",
+        "//div[@role='dialog']//button[.//span[normalize-space()='Post']]",
+        "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
+    ]
     
-        sc(driver, "pre_submit")
-        click_safe(driver, post_btn)
-        log("  [ok] Post button clicked. Waiting for Facebook to process...")
-        
-        # Wait until the creation dialog completely disappears from the DOM (meaning post succeeded)
+    post_btn = None
+    for xp in post_btn_xpaths:
         try:
-            # Facebook keeps the dialog open with a loading/spinner state, then destroys it.
-            # We allow up to 45 seconds for Facebook's servers to respond.
-            WebDriverWait(driver, 45).until(
+            # Give it up to 30s in case large images take longer to process
+            post_btn = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            log("  [ok] Post button found and enabled.")
+            break
+        except TimeoutException:
+            continue
+            
+    if not post_btn:
+        sc(driver, "post_btn_fail")
+        log("  [FAIL] Post button never became enabled (image upload may still be stuck).")
+        return False
+
+    sc(driver, "pre_submit")
+    click_safe(driver, post_btn)
+    log("  [ok] Post button clicked. Waiting for Facebook to process...")
+    
+    # Wait until the creation dialog completely disappears from the DOM (meaning post succeeded)
+    try:
+        # Facebook keeps the dialog open with a loading/spinner state, then destroys it.
+        # We allow up to 45 seconds for Facebook's servers to respond.
+        WebDriverWait(driver, 45).until(
+            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+        )
+        
+        # Additional buffer to ensure network activity/page settle completely
+        time.sleep(4)
+        log("  [ok] Dialog closed — post successfully published.")
+        sc(driver, "post_submitted")
+        return True
+        
+    except TimeoutException:
+        log("  [warn] Dialog still open after 45s. Checking for any remaining triggers...")
+        sc(driver, "post_dialog_stuck")
+        
+        # Fallback mechanism: check if the button can receive an Enter keypress or check document state
+        try:
+            post_btn.send_keys(Keys.ENTER)
+            time.sleep(5)
+            WebDriverWait(driver, 20).until(
                 EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
             )
-            
-            # Additional buffer to ensure network activity/page settle completely
-            time.sleep(4)
-            log("  [ok] Dialog closed — post successfully published.")
-            sc(driver, "post_submitted")
+            log("  [ok] Dialog closed after fallback action.")
             return True
-            
-        except TimeoutException:
-            log("  [warn] Dialog still open after 45s. Checking for any remaining triggers...")
-            sc(driver, "post_dialog_stuck")
-            
-            # Fallback mechanism: check if the button can receive an Enter keypress or check document state
-            try:
-                post_btn.send_keys(Keys.ENTER)
-                time.sleep(5)
-                WebDriverWait(driver, 20).until(
-                    EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
-                )
-                log("  [ok] Dialog closed after fallback action.")
-                return True
-            except Exception:
-                log("  [FAIL] Posting timed out completely. Network or Facebook restriction suspected.")
-                return False
+        except Exception:
+            log("  [FAIL] Posting timed out completely. Network or Facebook restriction suspected.")
+            return False
 
 
 # ─────────────────────────────────────────────────────────────────────
