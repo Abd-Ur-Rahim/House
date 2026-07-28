@@ -380,7 +380,10 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     opened = False
     for xp in trigger_xpaths:
         try:
-            el = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            el = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            # Scroll into view just in case it's hidden at the bottom of the screen
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.5)
             click_safe(driver, el)
             opened = True
             log("  [ok] Composer trigger clicked.")
@@ -394,10 +397,12 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         return False
 
     try:
-        # Wait for dialog to be fully visible (not just present in DOM)
-        WebDriverWait(driver, 12).until(
-            EC.visibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+        # Wait up to 20 seconds for the dialog to be present
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
         )
+        # Small pause to let the dialog render its internal elements
+        time.sleep(1.0)
         log("  [ok] Composer dialog is open.")
     except TimeoutException:
         sc(driver, "dialog_not_found")
