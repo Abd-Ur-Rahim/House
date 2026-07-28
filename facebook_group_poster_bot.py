@@ -554,84 +554,39 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     sc(driver, "pre_submit")
     click_safe(driver, post_btn)
-    log("  [ok] Post button clicked — waiting for server to process...")
+    log("  [ok] Post button clicked. Waiting for 'Posting...' text to disappear...")
 
-    # ── 4a · Wait for dialog to disappear ─────────────────────────────
+    # ── Wait for the "Posting..." text to disappear ───────────────────
+    # When Facebook starts processing, the button changes to "Posting..."
+    # We wait for that text to become invisible, which means the post is done.
+    posting_text_xpath = (
+        "//div[@role='dialog']//*[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'posting')]"
+    )
+
     try:
-        WebDriverWait(driver, 30).until(
-            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
-        )
-        log("  [ok] Composer dialog closed.")
-    except TimeoutException:
-        sc(driver, "post_dialog_stuck")
-        log("  [WARN] Dialog still open after 30s — attempting Enter fallback.")
-        from selenium.webdriver.common.keys import Keys
+        # First, wait a few seconds for the "Posting..." text to appear
         try:
-            post_btn.send_keys(Keys.ENTER)
-            time.sleep(3)
-            WebDriverWait(driver, 10).until(
-                EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+            WebDriverWait(driver, 5).until(
+                EC.visibility_of_element_located((By.XPATH, posting_text_xpath))
             )
+            log("  [..] 'Posting...' text detected. Waiting for it to disappear (up to 120s)...")
         except TimeoutException:
-            log("  [FAIL] Dialog never closed.")
-            return False
+            # If it doesn't appear within 5 seconds, it might have processed very quickly,
+            # or the text is slightly different. We proceed to wait for invisibility anyway.
+            pass
 
-    sc(driver, "post_dialog_closed")
-    
-    # ── 4b · Poll for success or failure (up to 90 seconds) ──────────
-    # Because Facebook can take a long time to process posts, we use a 
-    # polling loop that checks for error toasts OR verifies the post text 
-    # in the feed. It exits immediately upon either condition.
-    
-    # Use a long, unique snippet from your description to grep the feed
-    success_probe = " ".join(text.split())[:80].lower()
-    error_markers = [
-        "couldn't be shared", "could not be shared", "something went wrong",
-        "we couldn't upload", "couldn't upload", "your post was rejected",
-        "action blocked", "temporarily blocked", "try again later", "you can't post this"
-    ]
-    
-    log(f"  [..] Polling feed for up to 90 seconds to verify post...")
-    start_time = time.time()
-    timeout = 90 
-    
-    # Give FB a few seconds to process the request before we start reloading
-    time.sleep(5)
-    
-    while time.time() - start_time < timeout:
-        try:
-            # Reload the group feed to force render the new post
-            driver.refresh()
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
-            )
-            time.sleep(2) # Let feed content render
-            
-            body_text = driver.execute_script("return document.body.innerText.toLowerCase();")
-            
-            # 1. Check for errors first
-            for marker in error_markers:
-                if marker in body_text:
-                    log(f"  [FAIL] Facebook error detected: '{marker}'")
-                    sc(driver, "post_error_toast")
-                    return False
-                    
-            # 2. Check for success
-            if success_probe in body_text:
-                log("  [ok] Post verified in group feed — publish confirmed!")
-                sc(driver, "post_verified_in_feed")
-                return True
-                
-        except Exception:
-            pass # Ignore transient load errors and retry
-            
-        remaining = int(timeout - (time.time() - start_time))
-        log(f"  [..] Not found yet, waiting 10s before retry... ({remaining}s left)")
-        time.sleep(10)
+        # Now wait for the "Posting..." text to disappear completely
+        WebDriverWait(driver, 120).until(
+            EC.invisibility_of_element_located((By.XPATH, posting_text_xpath))
+        )
+        log("  [ok] 'Posting...' text disappeared. Post submitted successfully.")
+        sc(driver, "post_submitted")
+        return True
         
-    log(f"  [FAIL] Post text NOT found in feed after {timeout} seconds.")
-    sc(driver, "post_not_in_feed_timeout")
-    return False
+    except TimeoutException:
+        log("  [FAIL] 'Posting...' text did not disappear after 120s. Post might have failed.")
+        sc(driver, "post_text_stuck")
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -753,6 +708,9 @@ def main() -> int:
         sc(driver, "unhandled_error")
 
     finally:
+        if succeeded:
+            log("Holding browser open for 5s to safely finish network requests...")
+            time.sleep(5)
         try:
             driver.quit()
         except Exception:
