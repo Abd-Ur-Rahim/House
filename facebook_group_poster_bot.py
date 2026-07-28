@@ -591,15 +591,16 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         # WebDriverWait(driver, 100).until(
         #     EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
         # )
-        count = 120
-        while True and count >0:
+        count = 0
+        while True :
           text_element = WebDriverWait(driver, 10).until(
               EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Post Created Successfully')]"))
           )
-          if text_element:
+          if not text_element:
             break
-          count-=1
+          count+=1
           log(f"{count}")
+        log(f"final count{count}")
         log("  [ok] Dialog closed — post accepted.")
         sc(driver, "post_submitted")
         return True
