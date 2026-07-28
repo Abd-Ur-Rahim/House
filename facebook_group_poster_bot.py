@@ -557,7 +557,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     time.sleep(random.uniform(1.0, 2.0))
 
     # ── Step 4 · Submit (Post button inside dialog) ───────────────────
-    log("  [4/4] Submitting post...")
+log("  [4/4] Submitting post...")
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
         "//div[@role='dialog']//button[@aria-label='Post']",
@@ -569,9 +569,8 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     post_btn = None
     for xp in post_btn_xpaths:
         try:
-            # Wait up to 20 seconds for the button to be clickable (enabled)
-            # This confirms the image has finished uploading
-            post_btn = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            # Give it up to 30s in case large images take longer to process
+            post_btn = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, xp)))
             log("  [ok] Post button found and enabled.")
             break
         except TimeoutException:
@@ -579,47 +578,42 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             
     if not post_btn:
         sc(driver, "post_btn_fail")
-        log("  [FAIL] Could not find an enabled Post button (image might still be uploading).")
+        log("  [FAIL] Post button never became enabled (image upload may still be stuck).")
         return False
 
     sc(driver, "pre_submit")
     click_safe(driver, post_btn)
-    log("  [ok] Post button clicked.")
+    log("  [ok] Post button clicked. Waiting for Facebook to process...")
     
-    # Wait for dialog to close
+    # Wait until the creation dialog completely disappears from the DOM (meaning post succeeded)
     try:
-        # WebDriverWait(driver, 100).until(
-        #     EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
-        # )
-        count = 0
-        while True :
-          text_element = WebDriverWait(driver, 10).until(
-              EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Post Created Successfully')]"))
-          )
-          if not text_element:
-            break
-          count+=1
-          log(f"{count}")
-        log(f"final count{count}")
-        log("  [ok] Dialog closed — post accepted.")
+        # Facebook keeps the dialog open with a loading/spinner state, then destroys it.
+        # We allow up to 45 seconds for Facebook's servers to respond.
+        WebDriverWait(driver, 45).until(
+            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+        )
+        
+        # Additional buffer to ensure network activity/page settle completely
+        time.sleep(4)
+        log("  [ok] Dialog closed — post successfully published.")
         sc(driver, "post_submitted")
         return True
+        
     except TimeoutException:
-        log("  [warn] Dialog still open after 20s. Checking for errors or retrying click...")
+        log("  [warn] Dialog still open after 45s. Checking for any remaining triggers...")
         sc(driver, "post_dialog_stuck")
         
-        # Try pressing Enter as a fallback
-        from selenium.webdriver.common.keys import Keys
+        # Fallback mechanism: check if the button can receive an Enter keypress or check document state
         try:
             post_btn.send_keys(Keys.ENTER)
-            time.sleep(3)
-            WebDriverWait(driver, 100).until(
-                EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
+            time.sleep(5)
+            WebDriverWait(driver, 20).until(
+                EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
             )
-            log("  [ok] Dialog closed after fallback Enter key.")
+            log("  [ok] Dialog closed after fallback action.")
             return True
-        except TimeoutException:
-            log("  [FAIL] Dialog still open. Post likely failed.")
+        except Exception:
+            log("  [FAIL] Posting timed out completely. Network or Facebook restriction suspected.")
             return False
 
 
