@@ -548,35 +548,36 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             continue
             
     if not post_btn:
-        # sc(driver, "post_btn_fail")
+        sc(driver, "post_btn_fail")
         log("  [FAIL] Could not find an enabled Post button.")
         return False
 
-    # sc(driver, "pre_submit")
-    click_safe(driver, post_btn)
+    sc(driver, "pre_submit")
+    
+    # Try a normal click first. If intercepted, fall back to JS.
+    try:
+        post_btn.click()
+    except ElementClickInterceptedException:
+        driver.execute_script("arguments[0].click();", post_btn)
+        
     log("  [ok] Post button clicked. Waiting for 'Posting...' text to disappear...")
 
-    # ── Wait for the "Posting..." text to disappear ───────────────────
-    # When Facebook starts processing, the button changes to "Posting..."
-    # We wait for that text to become invisible, which means the post is done.
     posting_text_xpath = (
         "//div[@role='dialog']//*[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'posting')]"
     )
 
+    # ── Wait for the "Posting..." text to disappear ───────────────────
     try:
-        # First, wait a few seconds for the "Posting..." text to appear
+        # Wait for it to appear
         try:
             WebDriverWait(driver, 5).until(
                 EC.visibility_of_element_located((By.XPATH, posting_text_xpath))
             )
-            log("  [..] 'Posting...' text detected. Waiting for it to disappear (up to 120s)...")
         except TimeoutException:
-            # If it doesn't appear within 5 seconds, it might have processed very quickly,
-            # or the text is slightly different. We proceed to wait for invisibility anyway.
-            pass
+            pass # Might have processed very fast
 
-        # Now wait for the "Posting..." text to disappear completely
-        WebDriverWait(driver, 120).until(
+        # Wait for it to disappear (max 45 seconds to prevent infinite hangs)
+        WebDriverWait(driver, 45).until(
             EC.invisibility_of_element_located((By.XPATH, posting_text_xpath))
         )
         log("  [ok] 'Posting...' text disappeared. Post submitted successfully.")
@@ -584,9 +585,28 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         return True
         
     except TimeoutException:
-        log("  [FAIL] 'Posting...' text did not disappear after 120s. Post might have failed.")
-        # sc(driver, "post_text_stuck")
-        return False
+        log("  [WARN] 'Posting...' text stuck for 45s. Forcing page refresh to break lock...")
+        sc(driver, "post_text_stuck")
+        
+        # Force a refresh. If the post went through, the feed will reload with it.
+        driver.refresh()
+        time.sleep(3)
+        
+        # Check if the post actually made it to the feed despite the stuck text
+        try:
+            body_text = driver.execute_script("return document.body.innerText.toLowerCase();")
+            # Use the first 60 chars of your description as a probe
+            probe = " ".join(text.split())[:60].lower()
+            
+            if probe in body_text:
+                log("  [ok] Post verified in feed after forced refresh!")
+                return True
+            else:
+                log("  [FAIL] Post NOT in feed after refresh. It likely failed to upload.")
+                return False
+        except Exception:
+            log("  [FAIL] Could not verify post after refresh.")
+            return False
 
 
 # ─────────────────────────────────────────────────────────────────────
