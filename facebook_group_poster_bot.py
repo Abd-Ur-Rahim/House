@@ -168,7 +168,7 @@ def extract_group_id(url: str) -> str:
 
 
 def pick_target_group(state: dict) -> "str | None":
-    used       = set(state.get("used_groups", []))
+    used        = set(state.get("used_groups", []))
     candidates = [g for g in TARGET_GROUPS if g not in used]
     if not candidates:
         log("All eligible groups have been used today.")
@@ -250,11 +250,11 @@ def is_admin_only_on_page(driver) -> bool:
             By.XPATH,
             "//*[@role='main']//*["
             "  contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',"
-            "                         'abcdefghijklmnopqrstuvwxyz'),"
-            "            'only admins can post')"
+            "                     'abcdefghijklmnopqrstuvwxyz'),"
+            "           'only admins can post')"
             "  or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',"
             "                            'abcdefghijklmnopqrstuvwxyz'),"
-            "               'admins can post')]",
+            "              'admins can post')]",
         )
         log("  [admin-only] Admin-restriction element found in main content.")
         return True
@@ -271,7 +271,7 @@ def is_admin_only_on_page(driver) -> bool:
     has_join_btn = bool(driver.find_elements(
         By.XPATH,
         "//div[@role='button']//span[normalize-space()='Join group'"
-        "                          or normalize-space()='Join Group']",
+        "                        or normalize-space()='Join Group']",
     ))
     has_discussion_tab = bool(driver.find_elements(
         By.XPATH,
@@ -288,7 +288,7 @@ def is_admin_only_on_page(driver) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# REPLACED:  navigate_to_group()  —  direct URL, no search
+# NAVIGATION: navigate_to_group() — direct URL, no search
 # ─────────────────────────────────────────────────────────────────────
 def navigate_to_group(driver, group_url: str) -> "str | None":
     """
@@ -298,9 +298,6 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
 
     The driver is already on the group page when this returns.
     """
-    # ── Normalise the URL ────────────────────────────────────────────
-    #  • Replace  web.facebook.com  →  www.facebook.com  (consistency)
-    #  • Ensure trailing slash
     group_url = group_url.replace("web.facebook.com", "www.facebook.com")
     if not group_url.rstrip("/").endswith("/"):
         group_url = group_url.rstrip("/") + "/"
@@ -308,7 +305,6 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
     log(f"  Navigating directly to: {group_url}")
     driver.get(group_url)
 
-    # ── Wait for the real group page to finish loading ────────────────
     try:
         WebDriverWait(driver, 20).until(
             lambda d: "/groups/" in d.current_url
@@ -318,7 +314,7 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
         )
-        time.sleep(2)   # let the post composer / feed render
+        time.sleep(2)
     except TimeoutException:
         log("  Timed out waiting for group page.")
         sc(driver, "group_page_timeout")
@@ -336,7 +332,6 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
 def can_post(driver) -> bool:
     page_source_lower = driver.page_source.lower()
 
-    # 1. Check if the join request is pending
     pending_phrases = [
         "your request to participate is pending approval",
         "pending approval",
@@ -346,17 +341,15 @@ def can_post(driver) -> bool:
         log("  Not a group member — 'Pending approval' detected.")
         return False
 
-    # 2. Check if there is a "Join group" button
     joins = driver.find_elements(
         By.XPATH,
         "//div[@role='button']//span[normalize-space()='Join group'"
-        "                          or normalize-space()='Join Group']",
+        "                        or normalize-space()='Join Group']",
     )
     if joins:
         log("  Not a group member — 'Join group' button detected.")
         return False
 
-    # 3. Check if the composer box exists
     try:
         driver.find_element(
             By.XPATH,
@@ -379,7 +372,6 @@ def inject_text(driver, element, text: str) -> None:
     element.click()
     time.sleep(0.5)
 
-    # Primary: execCommand fires Lexical's synthetic input event
     driver.execute_script(
         "arguments[0].focus();"
         "document.execCommand('insertText', false, arguments[1]);",
@@ -411,23 +403,13 @@ def inject_text(driver, element, text: str) -> None:
 # Post composer: dialog-scoped XPaths + Lexical editor detection
 # ─────────────────────────────────────────────────────────────────────
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
-    """
-    Opens the post composer, attaches the image, types the description,
-    and submits.  Every element lookup is scoped to the dialog so comment
-    boxes cannot be matched by mistake.
-    """
-
-    # ── Step 1 · Click the "Write something" trigger ──────────────────
     log("  [1/4] Opening post composer dialog...")
     trigger_xpaths = [
-        # The clickable bar rendered as a button
         "//div[@role='main']//div[@role='button']"
         "    [.//span[contains(text(), 'Write something')"
-        "          or contains(text(), \"What's on your mind\")]]",
-        # Sometimes the span itself is the clickable target
+        "            or contains(text(), \"What's on your mind\")]]",
         "//div[@role='main']//span[contains(text(), 'Write something')"
-        "                       or contains(text(), \"What's on your mind\")]",
-        # Aria-labelled wrappers
+        "                        or contains(text(), \"What's on your mind\")]",
         "//div[@role='main']//div[@aria-label='Create a public post']",
         "//div[@role='main']//div[@aria-label='Create post']",
         "//div[@role='main']//div[@aria-label='Write something']",
@@ -449,12 +431,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         log("  [FAIL] Could not click the post composer trigger.")
         return False
 
-    # ── Wait for the dialog ───────────────────────────────────────────
     try:
         WebDriverWait(driver, 12).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
         )
-        time.sleep(1.5)   # let the dialog animate in
+        time.sleep(1.5)
         log("  [ok] Composer dialog is open.")
     except TimeoutException:
         sc(driver, "dialog_not_found")
@@ -463,14 +444,13 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     sc(driver, "composer_open")
 
-    # ── Step 2 · Click Photo/video inside the dialog ──────────────────
     log("  [2/4] Attaching photo...")
     photo_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Photo/video']",
         "//div[@role='dialog']//div[@aria-label='Photo or video']",
         "//div[@role='dialog']//span[normalize-space()='Photo/video']",
         "//div[@role='dialog']//span[contains(text(),'Photo')"
-        "                           and not(contains(text(),'Tag'))]",
+        "                            and not(contains(text(),'Tag'))]",
     ]
     for xp in photo_btn_xpaths:
         try:
@@ -482,7 +462,6 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         except (TimeoutException, NoSuchElementException):
             continue
 
-    # Upload via the hidden file input (dialog-scoped)
     try:
         file_input = WebDriverWait(driver, 12).until(
             EC.presence_of_element_located(
@@ -492,7 +471,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         abs_path = os.path.abspath(image_path)
         file_input.send_keys(abs_path)
         log(f"  [ok] File queued: {os.path.basename(abs_path)}")
-        time.sleep(5)   # wait for upload progress bar to finish
+        time.sleep(5)
     except TimeoutException:
         sc(driver, "file_input_fail")
         log("  [FAIL] File input not found inside dialog.")
@@ -500,18 +479,12 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     sc(driver, "photo_uploaded")
 
-    # ── Step 3 · Type in the POST EDITOR only (not a comment box) ─────
     log("  [3/4] Inserting description into post editor...")
-
     editor_xpaths = [
-        # Primary — Lexical editor (most reliable, FB-specific)
         "//div[@role='dialog']//div[@data-lexical-editor='true']",
-        # Fallback 1 — textbox role inside dialog
         "//div[@role='dialog']//div[@role='textbox' and @contenteditable='true']",
-        # Fallback 2 — notranslate class (FB's historical marker for the editor)
         "//div[@role='dialog']//div[@contenteditable='true'"
-        "                          and contains(@class,'notranslate')]",
-        # Fallback 3 — first contenteditable inside dialog
+        "                        and contains(@class,'notranslate')]",
         "//div[@role='dialog']//div[@contenteditable='true'][1]",
     ]
 
@@ -522,7 +495,6 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 EC.presence_of_element_located((By.XPATH, xp))
             )
 
-            # Safety check: make sure this element is NOT inside a comment section
             is_comment = driver.execute_script(
                 """
                 var el = arguments[0];
@@ -536,7 +508,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 tb,
             )
             if is_comment:
-                log(f"  [skip] Matched a comment box, skipping XPath.")
+                log("  [skip] Matched a comment box, skipping XPath.")
                 continue
 
             inject_text(driver, tb, text)
@@ -556,7 +528,6 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     sc(driver, "text_added")
     time.sleep(random.uniform(1.0, 2.0))
 
-    # ── Step 4 · Submit (Post button inside dialog) ───────────────────
     log("  [4/4] Submitting post...")
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
@@ -569,8 +540,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     post_btn = None
     for xp in post_btn_xpaths:
         try:
-            # Give it up to 30s in case large images take longer to process
-            post_btn = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            post_btn = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, xp)))
             log("  [ok] Post button found and enabled.")
             break
         except TimeoutException:
@@ -578,42 +548,35 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             
     if not post_btn:
         sc(driver, "post_btn_fail")
-        log("  [FAIL] Post button never became enabled (image upload may still be stuck).")
+        log("  [FAIL] Could not find an enabled Post button (image might still be uploading).")
         return False
 
     sc(driver, "pre_submit")
     click_safe(driver, post_btn)
-    log("  [ok] Post button clicked. Waiting for Facebook to process...")
+    log("  [ok] Post button clicked.")
     
-    # Wait until the creation dialog completely disappears from the DOM (meaning post succeeded)
     try:
-        # Facebook keeps the dialog open with a loading/spinner state, then destroys it.
-        # We allow up to 45 seconds for Facebook's servers to respond.
-        WebDriverWait(driver, 45).until(
+        WebDriverWait(driver, 20).until(
             EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
         )
-        
-        # Additional buffer to ensure network activity/page settle completely
-        time.sleep(4)
-        log("  [ok] Dialog closed — post successfully published.")
+        log("  [ok] Dialog closed — post accepted.")
         sc(driver, "post_submitted")
         return True
-        
     except TimeoutException:
-        log("  [warn] Dialog still open after 45s. Checking for any remaining triggers...")
+        log("  [warn] Dialog still open after 20s. Checking for errors or retrying click...")
         sc(driver, "post_dialog_stuck")
         
-        # Fallback mechanism: check if the button can receive an Enter keypress or check document state
+        from selenium.webdriver.common.keys import Keys
         try:
             post_btn.send_keys(Keys.ENTER)
-            time.sleep(5)
-            WebDriverWait(driver, 20).until(
+            time.sleep(3)
+            WebDriverWait(driver, 10).until(
                 EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
             )
-            log("  [ok] Dialog closed after fallback action.")
+            log("  [ok] Dialog closed after fallback Enter key.")
             return True
-        except Exception:
-            log("  [FAIL] Posting timed out completely. Network or Facebook restriction suspected.")
+        except TimeoutException:
+            log("  [FAIL] Dialog still open. Post likely failed.")
             return False
 
 
@@ -640,7 +603,6 @@ def main() -> int:
         )
         return 0
 
-    # Mark as used BEFORE any network action
     state["used_groups"] = state.get("used_groups", []) + [target_group]
     save_daily_state(state)
     log(f"'{extract_group_id(target_group)}' marked as used today "
@@ -660,7 +622,7 @@ def main() -> int:
     log("Launching Chrome (headless, undetected)...")
     driver = build_driver()
     driver.set_page_load_timeout(30)
-    succeeded    = False
+    succeeded      = False
     published_at = ""
 
     try:
@@ -672,7 +634,6 @@ def main() -> int:
         sc(driver, "session_verified")
         log("Session active.")
 
-        # ── Navigate directly to the group URL (no search) ────────────
         group_url = navigate_to_group(driver, target_group)
         if not group_url:
             write_github_output(
