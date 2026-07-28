@@ -589,7 +589,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     # Wait for dialog to close
     try:
         WebDriverWait(driver, 20).until(
-            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+            EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Create post']"))
         )
         log("  [ok] Dialog closed — post accepted.")
         sc(driver, "post_submitted")
