@@ -588,9 +588,18 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     
     # Wait for dialog to close
     try:
-        WebDriverWait(driver, 100).until(
-            EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
-        )
+        # WebDriverWait(driver, 100).until(
+        #     EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
+        # )
+        count = 120
+        while True and count >0:
+          text_element = WebDriverWait(driver, 10).until(
+              EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Post Created Successfully')]"))
+          )
+          if text_element:
+            break
+          count-=1
+          log(f"{count}")
         log("  [ok] Dialog closed — post accepted.")
         sc(driver, "post_submitted")
         return True
@@ -603,8 +612,8 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         try:
             post_btn.send_keys(Keys.ENTER)
             time.sleep(3)
-            WebDriverWait(driver, 10).until(
-                EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+            WebDriverWait(driver, 100).until(
+                EC.invisibility_of_element_located((By.XPATH, "//*[text() ='Posting']"))
             )
             log("  [ok] Dialog closed after fallback Enter key.")
             return True
