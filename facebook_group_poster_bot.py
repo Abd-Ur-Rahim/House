@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-Facebook Group Poster Bot
-=========================
+Facebook Group Poster Bot  (URL-based edition)
+==============================================
 Posts a random poster + description directly into ONE Facebook group per run.
 
-Fixes vs previous version
---------------------------
-FIX 1 – find_group_url() now CLICKS into the matching group result and
-         waits for the real /groups/<id>/ page to load before returning.
-         Previously it returned the /search/groups/ URL so the bot was
-         always posting (or trying to post) on the search-results page.
-
-FIX 2 – post_to_current_group() now waits for the composer DIALOG element
-         before doing anything, then scopes every subsequent XPath strictly
-         inside that dialog.  The text editor is located via Facebook/Lexical's
-         own  data-lexical-editor="true"  attribute which is NOT present on
-         comment boxes — so the bot can no longer accidentally type in a
-         comment field.
-
-FIX 3 – After find_group_url() the driver is already on the group page.
-         The old redundant driver.get(group_url) call (which reloaded the
-         page and could lose the already-loaded state) has been removed.
+CHANGES vs previous version
+---------------------------
+• TARGET_GROUPS is now a list of direct Facebook group URLs instead of
+  group names.  The bot navigates straight to each URL — no search step.
+• find_group_url() replaced by navigate_to_group() — simply does
+  driver.get(url) and waits for the group page to load.
+• is_buy_sell_by_name() removed (no group names to check).  Runtime
+  page-content checks (is_buy_sell_on_page, is_admin_only_on_page,
+  can_post) remain unchanged and still run after landing on the group.
+• urllib.parse import removed (no longer needed).
 """
 
 import json
@@ -28,7 +21,6 @@ import os
 import random
 import sys
 import time
-import urllib.parse
 from datetime import datetime, date
 
 import pytz
@@ -67,54 +59,58 @@ with open(
 
 POSTER_PATH = os.path.join(base_dir, "poster", "flyers", f"poster-{photo_number:02d}.png")
 
-# ─── Keywords that identify a "Buy & Sell" group by name ─────────────
-BUY_SELL_KEYWORDS = [
-    "buy and sell",
-    "buy & sell",
-    "buying and selling",
-    "sell and buy",
-    "classifieds",
-    "classified ads",
-]
-
 # ─────────────────────────────────────────────────────────────────────
-# Target Facebook groups
+# Target Facebook groups  —  DIRECT URLS (no search needed)
 # ─────────────────────────────────────────────────────────────────────
 try:
     from facebook_poster_bot import TARGET_GROUPS
 except ImportError:
     TARGET_GROUPS = [
-        "Kolonnawa / Dematagoda / Wellampitiya Community",
-        "Colombo Rent houses Apartment Annex",
-        "House Rent for Around Colombo - කුලියට නිවසක් කොළඹ අවටින්",
-        "wattala house for sale and rent",
-        "House, Rooms & Annex for Rent - ඉක්මනින් නිවාස කුලියට",
-        "Colombo Apartments - Rent",
-        "කුලියට නිවසක් :: house for rent",
-        "House for rent in kolonnawa",
-        "House, Annex & Rooms For Rent - ඉක්මනින් හොයාගන්න",
-        "බත්තරමුල්ල කුලී ගෙවල් - Battaramulla Rent Home or Annex",
-        "House for rent wattala",
-        "Sri Lanka Land & Property Exchange",
-        "Rent/sale/lease/buy/kolonnawa/ Colombo/Houses",
-        "ඉඩම් ගෙවල් විකිනීම කුලියට දීම Gewal idam selling rent home",
-        "ඉඩම් ගෙවල් වාහන ලාභෙට Land | House | Vehicle for Sale Sri Lanka",
-        "Houses for Rent - කුලියට ගෙයක්",
-        "කලුතර / කොළඹ / ගම්පහ ඉඩම් හා නිවාස - House & Land for sale",
-        "නිවාස ,ඉඩම්,House,Lands අඩුවට කුලියට,බද්දට,විකිනීමට",
-        "ikman.lk (Rent & Lease & Sale Property)",
-        "Land and House for Sale to Buy ඉඩම් සහ නිවාස විකිණීමට මිලදී ගැනීමට",
-        "Ceylon Property Hub | Buy Sell Rent | නිවාස ඉඩකඩම් විකිණීමට",
-        "නිවාස ඉඩම් ව්කිනිමට කුලියට දිමට සහ ගැනිමට සොයන්නො",
-        "House Lease and Rent in Colombo",
-        "dematagoda/maradana/maligawatta/grandpass/borella/kotahena/modara/narahenpi",
-        "House For Sale.. මන්දිරය නිවාස .... ඔබේ නිවස සොයාගන්න...",
-        "ඉඩම් සහ ගෙවල් විකිණීමට - Lands and Houses for Sale",
-        "NEGOMBO HOUSE / LANDS FOR SALE",
-        "කුලියට නිවසක් | House For Rent - Sri Lanka",
-        "Dehiwala - Mount Lavinia Community දෙහිවල ගල්කිස්ස අපි",
-        "නිවාස සහ ඉඩම් විකිණීමේ සහ මිලදී ගැනීමේ සමූහය-Real Estate In Sri Lanka",
-        "house and land sale නිවාස ඉඩකඩම් විකිනීමට",
+        "https://www.facebook.com/groups/3347281635431946/",
+        "https://www.facebook.com/groups/369484437602681/",
+        "https://www.facebook.com/groups/252729952602771/",
+        "https://www.facebook.com/groups/998215060615857/",
+        "https://www.facebook.com/groups/1110473696576146/",
+        "https://www.facebook.com/groups/3376751779312628/",
+        "https://www.facebook.com/groups/758342533900483/",
+        "https://www.facebook.com/groups/698019161007962/",
+        "https://www.facebook.com/groups/1040295236828015/",
+        "https://www.facebook.com/groups/3293314177417926/",
+        "https://www.facebook.com/groups/2614587088838165/",
+        "https://www.facebook.com/groups/388416683550762/",
+        "https://www.facebook.com/groups/464905197488015/",
+        "https://www.facebook.com/groups/806605707066232/",
+        "https://www.facebook.com/groups/865311145986357/",
+        "https://www.facebook.com/groups/1454977945176885/",
+        "https://www.facebook.com/groups/1291425895074789/",
+        "https://www.facebook.com/groups/2982345928645904/",
+        "https://www.facebook.com/groups/1196246380574780/",
+        "https://www.facebook.com/groups/943062569458341/",
+        "https://www.facebook.com/groups/651715026259479/",
+        "https://www.facebook.com/groups/997624967920384/",
+        "https://www.facebook.com/groups/717588028991805/",
+        "https://www.facebook.com/groups/243559725394520/",
+        "https://www.facebook.com/groups/694336761166835/",
+        "https://www.facebook.com/groups/280487894082768/",
+        "https://www.facebook.com/groups/729908459207984/",
+        "https://www.facebook.com/groups/748138546422011/",
+        "https://www.facebook.com/groups/447267004098054/",
+        "https://www.facebook.com/groups/1805736339751449/",
+        "https://www.facebook.com/groups/440590454604368/",
+        "https://www.facebook.com/groups/2802018006761420/",
+        "https://www.facebook.com/groups/735674309145618/",
+        "https://www.facebook.com/groups/598319314175896/",
+        "https://www.facebook.com/groups/1900241936950529/",
+        "https://www.facebook.com/groups/1313948606027111/",
+        "https://www.facebook.com/groups/687318265187753/",
+        "https://www.facebook.com/groups/2502721233243547/",
+        "https://www.facebook.com/groups/1493409651449007/",
+        "https://www.facebook.com/groups/687809108737946/",
+        "https://www.facebook.com/groups/811847530266654/",
+        "https://www.facebook.com/groups/renthouselk/",
+        "https://www.facebook.com/groups/dehiwala/",
+        "https://www.facebook.com/groups/402402418691485/",
+        "https://www.facebook.com/groups/270429608581198/",
     ]
 
 
@@ -167,24 +163,23 @@ def save_daily_state(state: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Group selection logic
+# Group selection logic  (URL-based — no name filtering)
 # ─────────────────────────────────────────────────────────────────────
-def is_buy_sell_by_name(group_name: str) -> bool:
-    name_lower = group_name.lower()
-    return any(kw in name_lower for kw in BUY_SELL_KEYWORDS)
+def extract_group_id(url: str) -> str:
+    """Extract the group ID / slug from a Facebook group URL for logging."""
+    parts = url.rstrip("/").split("/")
+    return parts[-1] if parts else url
 
 
 def pick_target_group(state: dict) -> "str | None":
     used       = set(state.get("used_groups", []))
-    candidates = [
-        g for g in TARGET_GROUPS
-        if g not in used and not is_buy_sell_by_name(g)
-    ]
+    candidates = [g for g in TARGET_GROUPS if g not in used]
     if not candidates:
         log("All eligible groups have been used today.")
         return None
     chosen = random.choice(candidates)
-    log(f"Selected group ({len(used)} already used today): {chosen}")
+    log(f"Selected group ({len(used)} already used today): "
+        f"{extract_group_id(chosen)}  →  {chosen}")
     return chosen
 
 
@@ -297,91 +292,32 @@ def is_admin_only_on_page(driver) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# FIX 1 – Group discovery: search → CLICK into group → return real URL
+# REPLACED:  navigate_to_group()  —  direct URL, no search
 # ─────────────────────────────────────────────────────────────────────
-def find_group_url(driver, group_name: str) -> "str | None":
+def navigate_to_group(driver, group_url: str) -> "str | None":
     """
-    Searches for the group, clicks the best-matching result, waits for the
-    actual group page (/groups/<id>/) to finish loading, then returns the
-    current URL.  The driver is already on the group page when this returns.
+    Navigate directly to the given Facebook group URL and wait for the
+    group page to finish loading.  Returns the final URL (after any
+    redirects) or None on failure.
+
+    The driver is already on the group page when this returns.
     """
-    encoded    = urllib.parse.quote(group_name)
-    search_url = f"https://www.facebook.com/search/groups/?q={encoded}"
-    log(f"  Searching: {search_url}")
-    driver.get(search_url)
-    sc(driver, "search_results")
+    # ── Normalise the URL ────────────────────────────────────────────
+    #  • Replace  web.facebook.com  →  www.facebook.com  (consistency)
+    #  • Ensure trailing slash
+    group_url = group_url.replace("web.facebook.com", "www.facebook.com")
+    if not group_url.rstrip("/").endswith("/"):
+        group_url = group_url.rstrip("/") + "/"
 
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
-        )
-        time.sleep(3)   # let React render result cards
-    except TimeoutException:
-        log("  Search results page timed out.")
-        return None
-
-    # ── Find best-matching link ───────────────────────────────────────
-    target_href = None
-    try:
-        all_links = driver.find_elements(
-            By.XPATH,
-            "//a[contains(@href, '/groups/') "
-            "    and not(contains(@href, '/groups/feed')) "
-            "    and not(contains(@href, '/search/'))]",
-        )
-        for link in all_links:
-            try:
-                href = link.get_attribute("href") or ""
-                if "/groups/" not in href:
-                    continue
-                spans     = link.find_elements(By.TAG_NAME, "span")
-                link_text = " ".join(s.text for s in spans if s.text).strip()
-                if not link_text:
-                    link_text = link.text.strip()
-
-                if (group_name.lower() == link_text.lower()
-                        or group_name.lower() in link_text.lower()
-                        or link_text.lower() in group_name.lower()):
-                    log(f"  Matched result: '{link_text[:70]}'")
-                    target_href = href
-                    break
-            except StaleElementReferenceException:
-                continue
-    except Exception as exc:
-        log(f"  Link scan error: {exc}")
-
-    # Fallback: first result
-    if target_href is None:
-        try:
-            first = driver.find_element(
-                By.XPATH,
-                "(//a[contains(@href, '/groups/') "
-                "     and not(contains(@href, '/groups/feed')) "
-                "     and not(contains(@href, '/search/'))])[1]",
-            )
-            target_href = first.get_attribute("href") or ""
-            if target_href:
-                log(f"  No name match — using first result: {target_href}")
-            else:
-                log(f"  Could not locate group '{group_name}' in search results.")
-                sc(driver, "group_not_found")
-                return None
-        except NoSuchElementException:
-            log(f"  Could not locate group '{group_name}' in search results.")
-            sc(driver, "group_not_found")
-            return None
-
-    # ── Navigate directly to the group URL ───────────────────────────
-    # Using driver.get() is more reliable than clicking stale search-result
-    # elements; it avoids StaleElementReferenceException entirely.
-    log(f"  Navigating to group: {target_href}")
-    driver.get(target_href)
+    log(f"  Navigating directly to: {group_url}")
+    driver.get(group_url)
 
     # ── Wait for the real group page to finish loading ────────────────
     try:
         WebDriverWait(driver, 20).until(
             lambda d: "/groups/" in d.current_url
                       and "/search/" not in d.current_url
+                      and "/login" not in d.current_url.lower()
         )
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
@@ -462,7 +398,7 @@ def inject_text(driver, element, text: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# FIX 2 – Post composer: dialog-scoped XPaths + Lexical editor detection
+# Post composer: dialog-scoped XPaths + Lexical editor detection
 # ─────────────────────────────────────────────────────────────────────
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
     """
@@ -555,12 +491,6 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     sc(driver, "photo_uploaded")
 
     # ── Step 3 · Type in the POST EDITOR only (not a comment box) ─────
-    #
-    # Facebook's composer uses the Lexical rich-text framework.
-    # The editor root carries  data-lexical-editor="true"  — this
-    # attribute does NOT appear on comment textareas or search inputs,
-    # so it is the safest selector to distinguish the post editor.
-    # All XPaths are scoped to  //div[@role='dialog']  for extra safety.
     log("  [3/4] Inserting description into post editor...")
 
     editor_xpaths = [
@@ -655,7 +585,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────
 def main() -> int:
     log("=" * 60)
-    log("Facebook Group Poster Bot — starting")
+    log("Facebook Group Poster Bot — starting (URL-based)")
     log(f"  poster-{photo_number:02d}  |  description-{description_number:02d}")
     log("=" * 60)
 
@@ -676,7 +606,7 @@ def main() -> int:
     # Mark as used BEFORE any network action
     state["used_groups"] = state.get("used_groups", []) + [target_group]
     save_daily_state(state)
-    log(f"'{target_group}' marked as used today "
+    log(f"'{extract_group_id(target_group)}' marked as used today "
         f"({len(state['used_groups'])} total used).")
 
     if not os.path.isfile(POSTER_PATH):
@@ -705,10 +635,8 @@ def main() -> int:
         sc(driver, "session_verified")
         log("Session active.")
 
-        # find_group_url() now navigates INTO the group itself.
-        # When it returns, the driver is already on the group page —
-        # no extra driver.get() is needed (that was causing the second bug).
-        group_url = find_group_url(driver, target_group)
+        # ── Navigate directly to the group URL (no search) ────────────
+        group_url = navigate_to_group(driver, target_group)
         if not group_url:
             write_github_output(
                 status="group_not_found",
@@ -722,7 +650,7 @@ def main() -> int:
         sc(driver, "group_page")
 
         if is_buy_sell_on_page(driver):
-            log(f"'{target_group}' is a Buy & Sell group — skipping.")
+            log(f"'{extract_group_id(target_group)}' is a Buy & Sell group — skipping.")
             sc(driver, "buy_sell_detected")
             write_github_output(
                 status="buy_sell_skipped",
@@ -734,7 +662,7 @@ def main() -> int:
             return 0
 
         if is_admin_only_on_page(driver):
-            log(f"'{target_group}' only allows admin posts — skipping.")
+            log(f"'{extract_group_id(target_group)}' only allows admin posts — skipping.")
             sc(driver, "admin_only_detected")
             write_github_output(
                 status="admin_only_skipped",
@@ -746,7 +674,7 @@ def main() -> int:
             return 0
 
         if not can_post(driver):
-            log(f"Not a member of '{target_group}' — skipping.")
+            log(f"Not a member of '{extract_group_id(target_group)}' — skipping.")
             write_github_output(
                 status="not_a_member",
                 group=target_group,
@@ -756,7 +684,7 @@ def main() -> int:
             )
             return 0
 
-        log(f"Posting to: {target_group}")
+        log(f"Posting to: {extract_group_id(target_group)}")
         succeeded = post_to_current_group(driver, POSTER_PATH, POST_DESCRIPTION)
 
         if succeeded:
