@@ -395,7 +395,7 @@ jobs:
         run: |
           POSTER="${{ steps.bot_retry.outputs.poster_number || steps.bot.outputs.poster_number || 'unknown' }}"
           TIME="${{ steps.bot_retry.outputs.published_time || steps.bot.outputs.published_time || 'unknown time' }}"
-          GROUPS="${{ steps.bot_retry.outputs.selected_groups || steps.bot.outputs.selected_groups || 'unknown groups' }}"
+          # GROUPS="${{ steps.bot_retry.outputs.selected_groups || steps.bot.outputs.selected_groups || 'unknown groups' }}"
           STATUS="${{ steps.bot_retry.outputs.status || steps.bot.outputs.status || 'unknown status' }}"
 
           if [ "${{ steps.gatekeeper.outputs.proceed }}" = "false" ] && [ "${{ github.event_name }}" = "schedule" ]; then

@@ -820,7 +820,7 @@ def main() -> int:
         status_label = "published" if succeeded else "FAILED to publish"
 
         write_github_output(
-            selected_groups =selected_groups,
+            # selected_groups =selected_groups,
             poster_number=photo_number,
             published_time=published_time,
             status=status_label,

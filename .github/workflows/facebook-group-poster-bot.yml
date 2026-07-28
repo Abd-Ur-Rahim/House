@@ -1,0 +1,353 @@
+name: Facebook Group Poster Bot
+
+# ─────────────────────────────────────────────────────────────────────
+# Fires once every hour → 24 triggers per calendar day.
+# Each run adds a random 0–55 minute delay so posts land at truly
+# random times, not on the clock-hour boundary.
+#
+# Per-run behaviour:
+#   • Restores .group_tracker.json from cache (keyed by SLT date + run_id
+#     with a date-prefix restore-key so the latest state is always found).
+#   • Runs facebook_group_poster_bot.py which:
+#       – picks a random, un-used, non-buy/sell group
+#       – posts poster-XX.png + description-XX.txt to that ONE group
+#       – writes the result back to .group_tracker.json
+#   • Saves the updated .group_tracker.json to cache.
+#   • Sends Telegram notifications (screenshots + status message).
+#
+# ⚠️  Concurrency note:
+#   This workflow shares the same Chrome profile
+#   (profiles/facebook_stable_session) as facebook-poster-bot.yml.
+#   The two workflows use DIFFERENT concurrency groups so they can run
+#   in parallel — but if you ever run them at exactly the same second,
+#   Chrome will raise "profile already in use".  To be safe, schedule
+#   this bot at xx:30 (half-past each hour) by changing the cron below
+#   to "30 * * * *" if the marketplace bot fires on the hour.
+# ─────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: "0 * * * *"    # Every hour (UTC) → 24 daily triggers
+  workflow_dispatch: {}    # Also allow manual runs from the Actions tab
+
+permissions:
+  contents: write
+
+# Queue runs; never cancel an in-progress post mid-way.
+concurrency:
+  group: facebook-group-poster-bot
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22   # Generous ceiling; normal run ≈ 8–12 min
+
+    steps:
+      # ── 0. Checkout ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 1. Resolve SLT date ──────────────────────────────────────
+      - name: Resolve SLT date
+        id: meta
+        run: |
+          SLT_DATE=$(date -d "+5 hours 30 minutes" +"%Y-%m-%d")
+          echo "date=$SLT_DATE" >> "$GITHUB_OUTPUT"
+          echo "SLT date: $SLT_DATE"
+
+      # ── 2. Restore today's group tracker state ───────────────────
+      # Key includes run_id so each save is unique.
+      # restore-keys prefix picks up the most recent save for today.
+      - name: Restore group tracker state
+        id: cache-tracker
+        uses: actions/cache/restore@v4
+        with:
+          path: .group_tracker.json
+          key: group-tracker-${{ steps.meta.outputs.date }}-${{ github.run_id }}
+          restore-keys: |
+            group-tracker-${{ steps.meta.outputs.date }}-
+
+      # ── 3. Random delay (spread posts across the hour) ────────────
+      - name: Random delay (0–55 min)
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            DELAY=$(( RANDOM % 3300 ))    # 0–3299 seconds ≈ 0–54 min
+            echo "💤 Sleeping ${DELAY}s (~$((DELAY / 60))m $((DELAY % 60))s)"
+            sleep "$DELAY"
+          else
+            echo "Manual trigger — skipping random delay."
+          fi
+
+      # ── 4. Restore Chrome profile from cache ─────────────────────
+      - name: Restore Chrome profile
+        id: cache-profile
+        uses: actions/cache@v4
+        with:
+          path: profiles
+          key: browser-profiles-${{ github.run_id }}
+          restore-keys: |
+            browser-profiles-
+
+      # ── 5. Seed profile from committed zip (cache miss only) ──────
+      - name: Seed profile from zip (if cache miss)
+        run: |
+          if [ -d "profiles/facebook_stable_session" ]; then
+            echo "✅ Using cached Chrome session."
+          elif [ -f profiles.zip ]; then
+            echo "📦 No cache — seeding from profiles.zip"
+            unzip -o profiles.zip -d .
+          else
+            echo "⚠️ No cache AND no profiles.zip — profile will be empty."
+          fi
+
+      # ── 6. System deps + Chrome ───────────────────────────────────
+      - name: Install system dependencies & Google Chrome
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y wget python3-tk python3-dev
+          wget -q -O /tmp/chrome.deb \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/chrome.deb
+          rm /tmp/chrome.deb
+
+      # ── 7. Python dependencies ────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip --quiet
+          pip install -r requirements.txt --quiet
+
+      # ── 8. Screenshots directory ──────────────────────────────────
+      - name: Create screenshots directory
+        run: mkdir -p screenshots
+
+      # ── 9. Start VLESS proxy (Xray) ───────────────────────────────
+      - name: Start VLESS proxy client
+        env:
+          VLESS_URL: ${{ secrets.VLESS_PROXY_URL }}
+        run: |
+          wget -q \
+            https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -q Xray-linux-64.zip -d xray
+
+          python3 - << 'PYEOF'
+          import os, json
+          from urllib.parse import urlparse, parse_qs
+
+          url    = os.environ["VLESS_URL"]
+          parsed = urlparse(url)
+          qs     = parse_qs(parsed.query)
+
+          config = {
+              "inbounds": [{
+                  "port": 10808, "listen": "127.0.0.1",
+                  "protocol": "socks", "settings": {"udp": True}
+              }],
+              "outbounds": [{
+                  "protocol": "vless",
+                  "settings": {
+                      "vnext": [{
+                          "address": parsed.hostname,
+                          "port": parsed.port,
+                          "users": [{
+                              "id":         parsed.username,
+                              "flow":       qs.get("flow",       [""])[0],
+                              "encryption": qs.get("encryption", ["none"])[0],
+                          }]
+                      }]
+                  },
+                  "streamSettings": {
+                      "network":  qs.get("type",     ["tcp"])[0],
+                      "security": qs.get("security", ["reality"])[0],
+                      "realitySettings": {
+                          "serverName":  qs.get("sni", [""])[0],
+                          "fingerprint": qs.get("fp",  [""])[0],
+                          "publicKey":   qs.get("pbk", [""])[0],
+                          "shortId":     qs.get("sid", [""])[0],
+                      }
+                  }
+              }]
+          }
+          with open("xray/config.json", "w") as f:
+              json.dump(config, f, indent=2)
+          PYEOF
+
+          nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
+          sleep 3
+          echo "🛰️  Proxy started — testing connection…"
+          curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me \
+            || echo "⚠️ Proxy test returned non-200 (may still work)"
+
+      # ── 10. FIRST ATTEMPT ─────────────────────────────────────────
+      - name: Run Group Poster Bot
+        id: bot
+        continue-on-error: true
+        env:
+          FB_EMAIL:    ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+          PROXY_HOST:  "127.0.0.1"
+          PROXY_PORT:  "10808"
+        run: python3 facebook_group_poster_bot.py
+
+      # ── 11. Alert + rebuild profile on failure ────────────────────
+      - name: Alert Telegram — rebuilding profile
+        if: steps.bot.outcome != 'success'
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=Markdown" \
+            -d "text=⚠️ *Group Poster Bot:* First attempt failed — rebuilding Chrome profile…"
+
+      - name: Rebuild Facebook Chrome profile
+        if: steps.bot.outcome != 'success'
+        env:
+          FB_EMAIL:    ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+        run: |
+          rm -f profiles.zip
+          python3 facebook_profile_initializer.py
+          # Trim heavy cache dirs before zipping
+          cd profiles/facebook_stable_session
+          rm -rf "Default/Code Cache" "Default/Cache" \
+                 optimization_guide_model_store component_crx_cache \
+                 WasmTtsEngine || true
+          cd ../..
+          zip -r profiles.zip profiles/facebook_stable_session/ \
+            -x "*/Singleton*" "*/LOCK" "*/.com.google.Chrome.*" "*cache*"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add profiles.zip
+          git commit -m "chore: auto-rebuilt Facebook profile seed [skip ci]" \
+            || echo "Nothing to commit."
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push
+
+      # ── 12. SECOND ATTEMPT (fresh profile) ───────────────────────
+      - name: Retry Group Poster Bot (fresh profile)
+        id: bot_retry
+        if: steps.bot.outcome != 'success'
+        continue-on-error: true
+        env:
+          FB_EMAIL:    ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+          PROXY_HOST:  "127.0.0.1"
+          PROXY_PORT:  "10808"
+        run: python3 facebook_group_poster_bot.py
+
+      # ── 13. Save updated group tracker state ─────────────────────
+      # Runs regardless of bot outcome so the state (used groups list)
+      # is always preserved, even when posting failed.
+      - name: Save group tracker state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .group_tracker.json
+          key: group-tracker-${{ steps.meta.outputs.date }}-${{ github.run_id }}
+
+      # ── 14. Upload screenshots as artifact ───────────────────────
+      - name: Upload screenshots artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: group-bot-screenshots-${{ github.run_id }}
+          path: screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── 15. Save Chrome profile back to cache ────────────────────
+      - name: Save Chrome profile to cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: profiles
+          key: browser-profiles-${{ github.run_id }}
+
+      # ── 16. Send screenshots to Telegram ─────────────────────────
+      - name: Send screenshots to Telegram
+        if: always()
+        run: |
+          BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
+          SCREENSHOT_DIR="screenshots"
+
+          # Collect all png/jpg files sorted by name
+          FILES=()
+          while IFS= read -r -d '' f; do
+            FILES+=("$f")
+          done < <(find "$SCREENSHOT_DIR" -maxdepth 1 -type f \
+                        \( -iname "*.png" -o -iname "*.jpg" \) \
+                        -print0 | sort -z)
+
+          TOTAL=${#FILES[@]}
+          echo "Found $TOTAL screenshot(s)."
+          [ "$TOTAL" -eq 0 ] && exit 0
+
+          # Single image → sendPhoto
+          if [ "$TOTAL" -eq 1 ]; then
+            curl -s -X POST \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "photo=@${FILES[0]}" \
+              -F "caption=📸 $(basename "${FILES[0]}") — run ${{ github.run_id }}" \
+              > /dev/null
+            exit 0
+          fi
+
+          # Multiple images → sendMediaGroup in batches of 10
+          BATCH_SIZE=10
+          i=0
+          while [ $i -lt "$TOTAL" ]; do
+            BATCH=("${FILES[@]:i:BATCH_SIZE}")
+            MEDIA_JSON="["
+            CURL_ARGS=()
+            for idx in "${!BATCH[@]}"; do
+              ATTACH="file${idx}"
+              [ "$idx" -gt 0 ] && MEDIA_JSON+=","
+              if [ "$idx" -eq 0 ] && [ "$i" -eq 0 ]; then
+                CAP="📸 Group Bot — run ${{ github.run_id }} (${TOTAL} screenshots)"
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH}\",\"caption\":\"${CAP}\"}"
+              else
+                MEDIA_JSON+="{\"type\":\"photo\",\"media\":\"attach://${ATTACH}\"}"
+              fi
+              CURL_ARGS+=(-F "${ATTACH}=@${BATCH[$idx]}")
+            done
+            MEDIA_JSON+="]"
+            curl -s -X POST \
+              "https://api.telegram.org/bot${BOT_TOKEN}/sendMediaGroup" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "media=${MEDIA_JSON}" \
+              "${CURL_ARGS[@]}" > /dev/null
+            echo "Sent batch of ${#BATCH[@]} screenshot(s)."
+            i=$(( i + BATCH_SIZE ))
+          done
+
+      # ── 17. Final Telegram status message ────────────────────────
+      - name: Send final Telegram status
+        if: always()
+        run: |
+          # Prefer retry outputs; fall back to first-attempt outputs
+          GROUP="${{ steps.bot_retry.outputs.group        || steps.bot.outputs.group        || 'unknown' }}"
+          POSTER="${{ steps.bot_retry.outputs.poster_number || steps.bot.outputs.poster_number || '?' }}"
+          TIME="${{ steps.bot_retry.outputs.published_time || steps.bot.outputs.published_time || 'N/A' }}"
+          STATUS="${{ steps.bot_retry.outputs.status       || steps.bot.outputs.status       || 'unknown' }}"
+          TOTAL="${{ steps.bot_retry.outputs.total_posts_today || steps.bot.outputs.total_posts_today || '?' }}"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            MSG="✅ *Group Poster Bot:*
+            📌 Group: ${GROUP}
+            🖼 Poster: poster-${POSTER}
+            🕐 Time: ${TIME}
+            📊 Posts today: ${TOTAL}/24"
+                      else
+                        MSG="❌ *Group Poster Bot:* Run FAILED
+            📌 Group: ${GROUP}
+            🖼 Poster: poster-${POSTER}
+            🔴 Status: ${STATUS}"
+          fi
+
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "parse_mode=Markdown" \
+            -d "text=${MSG}"
