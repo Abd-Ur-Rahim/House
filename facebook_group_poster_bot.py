@@ -317,12 +317,12 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
         time.sleep(2)
     except TimeoutException:
         log("  Timed out waiting for group page.")
-        sc(driver, "group_page_timeout")
+        # sc(driver, "group_page_timeout")
         return None
 
     final_url = driver.current_url
     log(f"  Group page loaded: {final_url}")
-    sc(driver, "group_page_loaded")
+    # sc(driver, "group_page_loaded")
     return final_url
 
 
@@ -427,7 +427,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             continue
 
     if not opened:
-        sc(driver, "composer_trigger_fail")
+        # sc(driver, "composer_trigger_fail")
         log("  [FAIL] Could not click the post composer trigger.")
         return False
 
@@ -438,11 +438,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         time.sleep(1.5)
         log("  [ok] Composer dialog is open.")
     except TimeoutException:
-        sc(driver, "dialog_not_found")
+        # sc(driver, "dialog_not_found")
         log("  [FAIL] Post composer dialog did not appear.")
         return False
 
-    sc(driver, "composer_open")
+    # sc(driver, "composer_open")
 
     log("  [2/4] Attaching photo...")
     photo_btn_xpaths = [
@@ -473,11 +473,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         log(f"  [ok] File queued: {os.path.basename(abs_path)}")
         time.sleep(5)
     except TimeoutException:
-        sc(driver, "file_input_fail")
+        # sc(driver, "file_input_fail")
         log("  [FAIL] File input not found inside dialog.")
         return False
 
-    sc(driver, "photo_uploaded")
+    # sc(driver, "photo_uploaded")
 
     log("  [3/4] Inserting description into post editor...")
     editor_xpaths = [
@@ -525,7 +525,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     if not text_added:
         log("  [WARN] Could not confirm text — continuing to submit.")
 
-    sc(driver, "text_added")
+    # sc(driver, "text_added")
     time.sleep(random.uniform(1.0, 2.0))
 
     # ── Step 4 · Submit (Post button inside dialog) ───────────────────
@@ -548,11 +548,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             continue
             
     if not post_btn:
-        sc(driver, "post_btn_fail")
+        # sc(driver, "post_btn_fail")
         log("  [FAIL] Could not find an enabled Post button.")
         return False
 
-    sc(driver, "pre_submit")
+    # sc(driver, "pre_submit")
     click_safe(driver, post_btn)
     log("  [ok] Post button clicked. Waiting for 'Posting...' text to disappear...")
 
@@ -585,7 +585,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         
     except TimeoutException:
         log("  [FAIL] 'Posting...' text did not disappear after 120s. Post might have failed.")
-        sc(driver, "post_text_stuck")
+        # sc(driver, "post_text_stuck")
         return False
 
 
@@ -640,7 +640,7 @@ def main() -> int:
         if "login" in driver.current_url.lower():
             log("Facebook session expired — re-run facebook_profile_initializer.py.")
             sys.exit(99)
-        sc(driver, "session_verified")
+        # sc(driver, "session_verified")
         log("Session active.")
 
         group_url = navigate_to_group(driver, target_group)
@@ -654,11 +654,11 @@ def main() -> int:
             )
             return 1
 
-        sc(driver, "group_page")
+        # sc(driver, "group_page")
 
         if is_buy_sell_on_page(driver):
             log(f"'{extract_group_id(target_group)}' is a Buy & Sell group — skipping.")
-            sc(driver, "buy_sell_detected")
+            # sc(driver, "buy_sell_detected")
             write_github_output(
                 status="buy_sell_skipped",
                 group=target_group,
@@ -670,7 +670,7 @@ def main() -> int:
 
         if is_admin_only_on_page(driver):
             log(f"'{extract_group_id(target_group)}' only allows admin posts — skipping.")
-            sc(driver, "admin_only_detected")
+            # sc(driver, "admin_only_detected")
             write_github_output(
                 status="admin_only_skipped",
                 group=target_group,
@@ -705,7 +705,7 @@ def main() -> int:
         raise
     except Exception as exc:
         log(f"Unhandled error: {exc}")
-        sc(driver, "unhandled_error")
+        # sc(driver, "unhandled_error")
 
     finally:
         if succeeded:
