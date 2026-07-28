@@ -334,6 +334,29 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
 # Membership check
 # ─────────────────────────────────────────────────────────────────────
 def can_post(driver) -> bool:
+    page_source_lower = driver.page_source.lower()
+
+    # 1. Check if the join request is pending
+    pending_phrases = [
+        "your request to participate is pending approval",
+        "pending approval",
+        "request to join",
+    ]
+    if any(phrase in page_source_lower for phrase in pending_phrases):
+        log("  Not a group member — 'Pending approval' detected.")
+        return False
+
+    # 2. Check if there is a "Join group" button
+    joins = driver.find_elements(
+        By.XPATH,
+        "//div[@role='button']//span[normalize-space()='Join group'"
+        "                          or normalize-space()='Join Group']",
+    )
+    if joins:
+        log("  Not a group member — 'Join group' button detected.")
+        return False
+
+    # 3. Check if the composer box exists
     try:
         driver.find_element(
             By.XPATH,
@@ -343,15 +366,6 @@ def can_post(driver) -> bool:
         return True
     except NoSuchElementException:
         pass
-
-    joins = driver.find_elements(
-        By.XPATH,
-        "//div[@role='button']//span[normalize-space()='Join group'"
-        "                          or normalize-space()='Join Group']",
-    )
-    if joins:
-        log("  Not a group member — 'Join group' button detected.")
-        return False
 
     return True
 
