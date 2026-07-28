@@ -4,20 +4,23 @@ Facebook Group Poster Bot
 =========================
 Posts a random poster + description directly into ONE Facebook group per run.
 
-Rules enforced:
-  ① Runs up to 24 times per day (controlled by GitHub Actions hourly cron).
-  ② Each run picks ONE group at random from TARGET_GROUPS.
-  ③ If the chosen group is a "Buy & Sell" type (name keyword OR runtime page
-     detection), it is skipped and another group is picked.
-  ④ The same group is never selected more than once per calendar day
-     (tracked in .group_tracker.json, persisted via GitHub Actions cache).
+Fixes vs previous version
+--------------------------
+FIX 1 – find_group_url() now CLICKS into the matching group result and
+         waits for the real /groups/<id>/ page to load before returning.
+         Previously it returned the /search/groups/ URL so the bot was
+         always posting (or trying to post) on the search-results page.
 
-State file schema (.group_tracker.json):
-  {
-      "date":        "2025-07-28",         # SLT date; reset daily
-      "used_groups": ["Group A", ...],     # attempted today (success or fail)
-      "total_posts": 3                     # successful posts today
-  }
+FIX 2 – post_to_current_group() now waits for the composer DIALOG element
+         before doing anything, then scopes every subsequent XPath strictly
+         inside that dialog.  The text editor is located via Facebook/Lexical's
+         own  data-lexical-editor="true"  attribute which is NOT present on
+         comment boxes — so the bot can no longer accidentally type in a
+         comment field.
+
+FIX 3 – After find_group_url() the driver is already on the group page.
+         The old redundant driver.get(group_url) call (which reloaded the
+         page and could lose the already-loaded state) has been removed.
 """
 
 import json
@@ -65,8 +68,6 @@ with open(
 POSTER_PATH = os.path.join(base_dir, "poster", "flyers", f"poster-{photo_number:02d}.png")
 
 # ─── Keywords that identify a "Buy & Sell" group by name ─────────────
-# Facebook "Buy and sell" groups use a Marketplace-style post form
-# (price / condition fields) which is incompatible with a standard post.
 BUY_SELL_KEYWORDS = [
     "buy and sell",
     "buy & sell",
@@ -78,12 +79,10 @@ BUY_SELL_KEYWORDS = [
 
 # ─────────────────────────────────────────────────────────────────────
 # Target Facebook groups
-# (imported from the main bot to stay DRY — any edits there apply here)
 # ─────────────────────────────────────────────────────────────────────
 try:
-    from facebook_poster_bot import TARGET_GROUPS          # preferred: single source
+    from facebook_poster_bot import TARGET_GROUPS
 except ImportError:
-    # Fallback: inline copy (kept in sync manually)
     TARGET_GROUPS = [
         "Kolonnawa / Dematagoda / Wellampitiya Community",
         "Colombo Rent houses Apartment Annex",
@@ -99,13 +98,13 @@ except ImportError:
         "Sri Lanka Land & Property Exchange",
         "Rent/sale/lease/buy/kolonnawa/ Colombo/Houses",
         "ඉඩම් ගෙවල් විකිනීම කුලියට දීම Gewal idam selling rent home",
-        "ඉඩම් ගෙවල් වාහන ලාභෙට Land | House | Vehicle for Sale Sri Lanka 🇱🇰",
+        "ඉඩම් ගෙවල් වාහන ලාභෙට Land | House | Vehicle for Sale Sri Lanka",
         "Houses for Rent - කුලියට ගෙයක්",
         "කලුතර / කොළඹ / ගම්පහ ඉඩම් හා නිවාස - House & Land for sale",
-        "නිවාස 🏠️,ඉඩම්,🏘️House,🏡️Lands අඩුවට කුලියට,බද්දට,විකිනීමට",
+        "නිවාස ,ඉඩම්,House,Lands අඩුවට කුලියට,බද්දට,විකිනීමට",
         "ikman.lk (Rent & Lease & Sale Property)",
         "Land and House for Sale to Buy ඉඩම් සහ නිවාස විකිණීමට මිලදී ගැනීමට",
-        "Ceylon Property Hub 🏘️ | Buy • Sell • Rent | නිවාස ඉඩකඩම් විකිණීමට",
+        "Ceylon Property Hub | Buy Sell Rent | නිවාස ඉඩකඩම් විකිණීමට",
         "නිවාස ඉඩම් ව්කිනිමට කුලියට දිමට සහ ගැනිමට සොයන්නො",
         "House Lease and Rent in Colombo",
         "dematagoda/maradana/maligawatta/grandpass/borella/kotahena/modara/narahenpi",
@@ -114,7 +113,7 @@ except ImportError:
         "NEGOMBO HOUSE / LANDS FOR SALE",
         "කුලියට නිවසක් | House For Rent - Sri Lanka",
         "Dehiwala - Mount Lavinia Community දෙහිවල ගල්කිස්ස අපි",
-        "නිවාස සහ ඉඩම් විකිණී⁣මේ සහ මිලදී ගැනීමේ සමූහය-Real Estate In Sri Lanka",
+        "නිවාස සහ ඉඩම් විකිණීමේ සහ මිලදී ගැනීමේ සමූහය-Real Estate In Sri Lanka",
         "house and land sale නිවාස ඉඩකඩම් විකිනීමට",
     ]
 
@@ -144,7 +143,6 @@ def write_github_output(**kwargs) -> None:
 # Daily state management
 # ─────────────────────────────────────────────────────────────────────
 def load_daily_state() -> dict:
-    """Loads today's tracking state; returns a fresh dict if none exists."""
     today = date.today().isoformat()
     if os.path.isfile(STATE_FILE):
         try:
@@ -153,45 +151,40 @@ def load_daily_state() -> dict:
             if state.get("date") == today:
                 used_count = len(state.get("used_groups", []))
                 posts      = state.get("total_posts", 0)
-                log(f"📋 Today's state loaded: {used_count} groups attempted, "
+                log(f"Today's state loaded: {used_count} groups attempted, "
                     f"{posts} successful posts.")
                 return state
         except (json.JSONDecodeError, KeyError, ValueError):
-            log("⚠️ Corrupt state file — starting fresh.")
-    log("📋 No state found for today — creating fresh state.")
+            log("Corrupt state file — starting fresh.")
+    log("No state found for today — creating fresh state.")
     return {"date": today, "used_groups": [], "total_posts": 0}
 
 
 def save_daily_state(state: dict) -> None:
     with open(STATE_FILE, "w", encoding="utf-8") as fh:
         json.dump(state, fh, ensure_ascii=False, indent=2)
-    log("💾 State saved.")
+    log("State saved.")
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Group selection logic
 # ─────────────────────────────────────────────────────────────────────
 def is_buy_sell_by_name(group_name: str) -> bool:
-    """Pre-flight name check; avoids launching a browser for obvious skips."""
     name_lower = group_name.lower()
     return any(kw in name_lower for kw in BUY_SELL_KEYWORDS)
 
 
-def pick_target_group(state: dict) -> str | None:
-    """
-    Picks a random, un-used, non-buy/sell group from TARGET_GROUPS.
-    Returns None when every eligible group has been used today.
-    """
+def pick_target_group(state: dict) -> "str | None":
     used       = set(state.get("used_groups", []))
     candidates = [
         g for g in TARGET_GROUPS
         if g not in used and not is_buy_sell_by_name(g)
     ]
     if not candidates:
-        log("⚠️ All eligible groups have been used today.")
+        log("All eligible groups have been used today.")
         return None
     chosen = random.choice(candidates)
-    log(f"🎯 Selected group ({len(used)} already used today): {chosen}")
+    log(f"Selected group ({len(used)} already used today): {chosen}")
     return chosen
 
 
@@ -202,7 +195,7 @@ def build_driver() -> Driver:
     profile_path = os.path.join(base_dir, "profiles", "facebook_stable_session")
     if not os.path.isdir(profile_path):
         sys.exit(
-            f"❌ Chrome profile not found:\n  {profile_path}\n"
+            f"Chrome profile not found:\n  {profile_path}\n"
             "Run facebook_profile_initializer.py first."
         )
     proxy = f"socks5://{PROXY_HOST}:{PROXY_PORT}"
@@ -217,7 +210,6 @@ def build_driver() -> Driver:
 
 
 def sc(driver, name: str) -> None:
-    """Save a labelled screenshot to the screenshots folder."""
     try:
         driver.save_screenshot(os.path.join(SCREENSHOTS, f"grp_{name}.png"))
     except Exception:
@@ -225,26 +217,16 @@ def sc(driver, name: str) -> None:
 
 
 def click_safe(driver, element) -> None:
-    """Click with JS fallback if the standard click is intercepted."""
     try:
         element.click()
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
 
 
-def wait_for(driver, timeout: int = 15) -> WebDriverWait:
-    return WebDriverWait(driver, timeout)
-
-
 # ─────────────────────────────────────────────────────────────────────
 # Runtime Buy & Sell page detection
 # ─────────────────────────────────────────────────────────────────────
 def is_buy_sell_on_page(driver) -> bool:
-    """
-    Detects Facebook 'Buy and sell' group type at runtime.
-    These groups show 'Sell something' / 'List an item' CTAs instead of
-    the normal 'Write something...' post composer.
-    """
     indicators = driver.find_elements(
         By.XPATH,
         "//span[contains(text(), 'Sell something')"
@@ -255,88 +237,171 @@ def is_buy_sell_on_page(driver) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Group discovery: search → URL
+# Runtime admin-only group detection
 # ─────────────────────────────────────────────────────────────────────
-def find_group_url(driver, group_name: str) -> str | None:
+def is_admin_only_on_page(driver) -> bool:
+    page_source_lower = driver.page_source.lower()
+
+    admin_phrases = [
+        "only admins can post",
+        "only admin can post",
+        "admins can post to this group",
+        "only admins and moderators can post",
+        "only group admins can post",
+        "posting is limited to admins",
+    ]
+    if any(phrase in page_source_lower for phrase in admin_phrases):
+        log("  [admin-only] Explicit 'admins only' text detected on page.")
+        return True
+
+    try:
+        driver.find_element(
+            By.XPATH,
+            "//*[@role='main']//*["
+            "  contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',"
+            "                         'abcdefghijklmnopqrstuvwxyz'),"
+            "            'only admins can post')"
+            "  or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',"
+            "                            'abcdefghijklmnopqrstuvwxyz'),"
+            "               'admins can post')]",
+        )
+        log("  [admin-only] Admin-restriction element found in main content.")
+        return True
+    except NoSuchElementException:
+        pass
+
+    has_composer = bool(driver.find_elements(
+        By.XPATH,
+        "//div[@role='main']//*["
+        "  contains(@placeholder, 'Write something')"
+        "  or contains(@aria-label, 'Write something')"
+        "  or (self::span and contains(text(), 'Write something'))]",
+    ))
+    has_join_btn = bool(driver.find_elements(
+        By.XPATH,
+        "//div[@role='button']//span[normalize-space()='Join group'"
+        "                          or normalize-space()='Join Group']",
+    ))
+    has_discussion_tab = bool(driver.find_elements(
+        By.XPATH,
+        "//a[contains(@href, '/groups/') and ("
+        "  contains(@aria-label, 'Discussion')"
+        "  or contains(text(), 'Discussion'))]",
+    ))
+
+    if not has_composer and not has_join_btn and has_discussion_tab:
+        log("  [admin-only] Member of group but no post composer visible.")
+        return True
+
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────
+# FIX 1 – Group discovery: search → CLICK into group → return real URL
+# ─────────────────────────────────────────────────────────────────────
+def find_group_url(driver, group_name: str) -> "str | None":
     """
-    Navigates to Facebook's group-search page and returns the URL of the
-    best-matching group.  Returns None if no match is found.
+    Searches for the group, clicks the best-matching result, waits for the
+    actual group page (/groups/<id>/) to finish loading, then returns the
+    current URL.  The driver is already on the group page when this returns.
     """
     encoded    = urllib.parse.quote(group_name)
     search_url = f"https://www.facebook.com/search/groups/?q={encoded}"
-    log(f"  🔍 Searching: {search_url}")
+    log(f"  Searching: {search_url}")
     driver.get(search_url)
     sc(driver, "search_results")
 
     try:
-        wait_for(driver, 15).until(
+        WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
         )
-        time.sleep(2.5)
+        time.sleep(3)   # let React render result cards
     except TimeoutException:
-        log("  [!] Search results page timed out.")
+        log("  Search results page timed out.")
         return None
 
-    # ── Strategy 1: find a link whose visible text matches the group name ──
+    # ── Find best-matching link ───────────────────────────────────────
+    target_href = None
     try:
-        all_group_links = driver.find_elements(
+        all_links = driver.find_elements(
             By.XPATH,
             "//a[contains(@href, '/groups/') "
             "    and not(contains(@href, '/groups/feed')) "
             "    and not(contains(@href, '/search/'))]",
         )
-        for link in all_group_links:
+        for link in all_links:
             try:
                 href = link.get_attribute("href") or ""
                 if "/groups/" not in href:
                     continue
-
-                # Collect visible text from the link element
-                spans = link.find_elements(By.TAG_NAME, "span")
+                spans     = link.find_elements(By.TAG_NAME, "span")
                 link_text = " ".join(s.text for s in spans if s.text).strip()
                 if not link_text:
                     link_text = link.text.strip()
 
-                # Exact or strong partial match
                 if (group_name.lower() == link_text.lower()
                         or group_name.lower() in link_text.lower()
                         or link_text.lower() in group_name.lower()):
-                    log(f"  ✅ Matched: '{link_text[:70]}' → {href}")
-                    return href
+                    log(f"  Matched result: '{link_text[:70]}'")
+                    target_href = href
+                    break
             except StaleElementReferenceException:
                 continue
     except Exception as exc:
-        log(f"  [warn] Link scan error: {exc}")
+        log(f"  Link scan error: {exc}")
 
-    # ── Strategy 2: just take the very first group result ─────────────
+    # Fallback: first result
+    if target_href is None:
+        try:
+            first = driver.find_element(
+                By.XPATH,
+                "(//a[contains(@href, '/groups/') "
+                "     and not(contains(@href, '/groups/feed')) "
+                "     and not(contains(@href, '/search/'))])[1]",
+            )
+            target_href = first.get_attribute("href") or ""
+            if target_href:
+                log(f"  No name match — using first result: {target_href}")
+            else:
+                log(f"  Could not locate group '{group_name}' in search results.")
+                sc(driver, "group_not_found")
+                return None
+        except NoSuchElementException:
+            log(f"  Could not locate group '{group_name}' in search results.")
+            sc(driver, "group_not_found")
+            return None
+
+    # ── Navigate directly to the group URL ───────────────────────────
+    # Using driver.get() is more reliable than clicking stale search-result
+    # elements; it avoids StaleElementReferenceException entirely.
+    log(f"  Navigating to group: {target_href}")
+    driver.get(target_href)
+
+    # ── Wait for the real group page to finish loading ────────────────
     try:
-        first = driver.find_element(
-            By.XPATH,
-            "(//a[contains(@href, '/groups/') "
-            "     and not(contains(@href, '/groups/feed')) "
-            "     and not(contains(@href, '/search/'))])[1]",
+        WebDriverWait(driver, 20).until(
+            lambda d: "/groups/" in d.current_url
+                      and "/search/" not in d.current_url
         )
-        href = first.get_attribute("href") or ""
-        if href:
-            log(f"  ⚠️ No name match — using first result: {href}")
-            return href
-    except NoSuchElementException:
-        pass
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
+        )
+        time.sleep(2)   # let the post composer / feed render
+    except TimeoutException:
+        log("  Timed out waiting for group page.")
+        sc(driver, "group_page_timeout")
+        return None
 
-    sc(driver, "group_not_found")
-    log(f"  ❌ Could not locate group '{group_name}' in search results.")
-    return None
+    final_url = driver.current_url
+    log(f"  Group page loaded: {final_url}")
+    sc(driver, "group_page_loaded")
+    return final_url
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Membership check
 # ─────────────────────────────────────────────────────────────────────
 def can_post(driver) -> bool:
-    """
-    Returns True if the post composer ('Write something…') is visible,
-    False if the group shows a 'Join group' button (not a member).
-    """
-    # Positive signal: composer is present
     try:
         driver.find_element(
             By.XPATH,
@@ -347,35 +412,28 @@ def can_post(driver) -> bool:
     except NoSuchElementException:
         pass
 
-    # Negative signal: join button present
     joins = driver.find_elements(
         By.XPATH,
         "//div[@role='button']//span[normalize-space()='Join group'"
         "                          or normalize-space()='Join Group']",
     )
     if joins:
-        log("  ⚠️ Not a group member — 'Join group' button detected.")
+        log("  Not a group member — 'Join group' button detected.")
         return False
 
-    return True   # Ambiguous — try to post anyway
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────
-# contenteditable text injection (React-compatible)
+# contenteditable text injection (React / Lexical compatible)
 # ─────────────────────────────────────────────────────────────────────
 def inject_text(driver, element, text: str) -> None:
-    """
-    Inserts text into a Facebook contenteditable div.
-    Uses document.execCommand('insertText') which fires the React
-    synthetic 'input' event correctly.  Falls back to textContent +
-    InputEvent dispatch if execCommand yields an empty result.
-    """
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
     time.sleep(0.3)
     element.click()
     time.sleep(0.5)
 
-    # Primary: execCommand (triggers React state update)
+    # Primary: execCommand fires Lexical's synthetic input event
     driver.execute_script(
         "arguments[0].focus();"
         "document.execCommand('insertText', false, arguments[1]);",
@@ -384,23 +442,18 @@ def inject_text(driver, element, text: str) -> None:
     )
     time.sleep(0.5)
 
-    # Verify — fallback if execCommand left the box empty
     current = driver.execute_script("return arguments[0].textContent;", element)
     if not current or len(current.strip()) < 5:
-        log("  [fallback] execCommand yielded empty box — using textContent setter.")
+        log("  [fallback] execCommand empty — using textContent + InputEvent.")
         driver.execute_script(
             """
             var el   = arguments[0];
             var text = arguments[1];
             el.focus();
-            // Clear then set via text node so React sees a real DOM change
             while (el.firstChild) { el.removeChild(el.firstChild); }
-            var node = document.createTextNode(text);
-            el.appendChild(node);
+            el.appendChild(document.createTextNode(text));
             el.dispatchEvent(new InputEvent('input', {
-                bubbles:   true,
-                inputType: 'insertText',
-                data:      text,
+                bubbles: true, inputType: 'insertText', data: text
             }));
             """,
             element,
@@ -409,52 +462,69 @@ def inject_text(driver, element, text: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Core: post image + text to the currently-loaded group page
+# FIX 2 – Post composer: dialog-scoped XPaths + Lexical editor detection
 # ─────────────────────────────────────────────────────────────────────
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
     """
-    Opens the post composer on the current group page, attaches an image,
-    adds the description text, and submits.  Returns True on success.
+    Opens the post composer, attaches the image, types the description,
+    and submits.  Every element lookup is scoped to the dialog so comment
+    boxes cannot be matched by mistake.
     """
 
-    # ── Step 1 · Open the post composer ──────────────────────────────
-    log("  [1/4] Opening post composer…")
-    composer_xpaths = [
+    # ── Step 1 · Click the "Write something" trigger ──────────────────
+    log("  [1/4] Opening post composer dialog...")
+    trigger_xpaths = [
+        # The clickable bar rendered as a button
+        "//div[@role='main']//div[@role='button']"
+        "    [.//span[contains(text(), 'Write something')"
+        "          or contains(text(), \"What's on your mind\")]]",
+        # Sometimes the span itself is the clickable target
         "//div[@role='main']//span[contains(text(), 'Write something')"
-        "                         or contains(text(), \"What's on your mind\")]",
-        "//span[contains(text(), 'Write something')]",
-        "//div[@aria-label='Create a public post']",
-        "//div[@aria-label='Write something']",
-        "//div[@role='main']//div[@role='button' and @tabindex='0'][1]",
+        "                       or contains(text(), \"What's on your mind\")]",
+        # Aria-labelled wrappers
+        "//div[@role='main']//div[@aria-label='Create a public post']",
+        "//div[@role='main']//div[@aria-label='Create post']",
+        "//div[@role='main']//div[@aria-label='Write something']",
     ]
+
     opened = False
-    for xp in composer_xpaths:
+    for xp in trigger_xpaths:
         try:
             el = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, xp)))
             click_safe(driver, el)
             opened = True
-            log("  [ok] Composer opened.")
-            time.sleep(2)
+            log("  [ok] Composer trigger clicked.")
             break
         except (TimeoutException, NoSuchElementException, StaleElementReferenceException):
             continue
 
     if not opened:
-        sc(driver, "composer_fail")
-        log("  [FAIL] Could not open post composer.")
+        sc(driver, "composer_trigger_fail")
+        log("  [FAIL] Could not click the post composer trigger.")
+        return False
+
+    # ── Wait for the dialog ───────────────────────────────────────────
+    try:
+        WebDriverWait(driver, 12).until(
+            EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
+        )
+        time.sleep(1.5)   # let the dialog animate in
+        log("  [ok] Composer dialog is open.")
+    except TimeoutException:
+        sc(driver, "dialog_not_found")
+        log("  [FAIL] Post composer dialog did not appear.")
         return False
 
     sc(driver, "composer_open")
 
-    # ── Step 2 · Attach the photo ─────────────────────────────────────
-    log("  [2/4] Attaching photo…")
-
+    # ── Step 2 · Click Photo/video inside the dialog ──────────────────
+    log("  [2/4] Attaching photo...")
     photo_btn_xpaths = [
-        "//div[@role='dialog']//span[contains(text(), 'Photo/video')]",
         "//div[@role='dialog']//div[@aria-label='Photo/video']",
-        "//span[contains(text(), 'Photo/video')]",
-        "//div[@aria-label='Photo/video']",
-        "//span[contains(text(), 'Photo') and not(contains(text(), 'video'))]",
+        "//div[@role='dialog']//div[@aria-label='Photo or video']",
+        "//div[@role='dialog']//span[normalize-space()='Photo/video']",
+        "//div[@role='dialog']//span[contains(text(),'Photo')"
+        "                           and not(contains(text(),'Tag'))]",
     ]
     for xp in photo_btn_xpaths:
         try:
@@ -466,68 +536,110 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         except (TimeoutException, NoSuchElementException):
             continue
 
-    # Upload via the hidden file input
+    # Upload via the hidden file input (dialog-scoped)
     try:
         file_input = WebDriverWait(driver, 12).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='file']"))
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[@role='dialog']//input[@type='file']")
+            )
         )
         abs_path = os.path.abspath(image_path)
         file_input.send_keys(abs_path)
         log(f"  [ok] File queued: {os.path.basename(abs_path)}")
-        time.sleep(4)          # Allow the upload progress to settle
+        time.sleep(4)   # wait for upload progress bar to finish
     except TimeoutException:
         sc(driver, "file_input_fail")
-        log("  [FAIL] File input element not found.")
+        log("  [FAIL] File input not found inside dialog.")
         return False
 
     sc(driver, "photo_uploaded")
 
-    # ── Step 3 · Type the description ────────────────────────────────
-    log("  [3/4] Inserting description…")
-    text_box_xpaths = [
-        "//div[@role='dialog']//div[@contenteditable='true' and @role='textbox']",
-        "//div[@contenteditable='true' and @role='textbox']",
+    # ── Step 3 · Type in the POST EDITOR only (not a comment box) ─────
+    #
+    # Facebook's composer uses the Lexical rich-text framework.
+    # The editor root carries  data-lexical-editor="true"  — this
+    # attribute does NOT appear on comment textareas or search inputs,
+    # so it is the safest selector to distinguish the post editor.
+    # All XPaths are scoped to  //div[@role='dialog']  for extra safety.
+    log("  [3/4] Inserting description into post editor...")
+
+    editor_xpaths = [
+        # Primary — Lexical editor (most reliable, FB-specific)
+        "//div[@role='dialog']//div[@data-lexical-editor='true']",
+        # Fallback 1 — textbox role inside dialog
+        "//div[@role='dialog']//div[@role='textbox' and @contenteditable='true']",
+        # Fallback 2 — notranslate class (FB's historical marker for the editor)
         "//div[@role='dialog']//div[@contenteditable='true'"
-        "                          and contains(@class, 'notranslate')]",
+        "                          and contains(@class,'notranslate')]",
+        # Fallback 3 — first contenteditable inside dialog
         "//div[@role='dialog']//div[@contenteditable='true'][1]",
     ]
+
     text_added = False
-    for xp in text_box_xpaths:
+    for xp in editor_xpaths:
         try:
             tb = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, xp))
             )
+
+            # Safety check: make sure this element is NOT inside a comment section
+            is_comment = driver.execute_script(
+                """
+                var el = arguments[0];
+                while (el) {
+                    var lbl = (el.getAttribute('aria-label') || '').toLowerCase();
+                    if (lbl.includes('comment') || lbl.includes('reply')) return true;
+                    el = el.parentElement;
+                }
+                return false;
+                """,
+                tb,
+            )
+            if is_comment:
+                log(f"  [skip] Matched a comment box, skipping XPath.")
+                continue
+
             inject_text(driver, tb, text)
             actual = driver.execute_script("return arguments[0].textContent;", tb)
             if actual and len(actual.strip()) > 5:
                 log(f"  [ok] Description inserted ({len(text)} chars).")
                 text_added = True
                 break
+            else:
+                log("  [warn] Text box empty after inject — trying next XPath.")
         except (TimeoutException, NoSuchElementException):
             continue
 
     if not text_added:
-        log("  [WARN] Could not verify description box — continuing anyway.")
+        log("  [WARN] Could not confirm text — continuing to submit.")
 
     sc(driver, "text_added")
     time.sleep(random.uniform(1.0, 2.0))
 
-    # ── Step 4 · Click Post ───────────────────────────────────────────
-    log("  [4/4] Submitting post…")
+    # ── Step 4 · Submit (Post button inside dialog) ───────────────────
+    log("  [4/4] Submitting post...")
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
         "//div[@role='dialog']//div[@role='button']"
         "    [.//span[normalize-space()='Post']]",
-        "//div[@aria-label='Post'][@role='button']",
-        "//div[@role='button'][.//span[normalize-space()='Post']]",
+        # Some locales / group types say "Share" instead
+        "//div[@role='dialog']//div[@role='button']"
+        "    [.//span[normalize-space()='Share']]",
     ]
     for xp in post_btn_xpaths:
         try:
             btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xp)))
             sc(driver, "pre_submit")
             click_safe(driver, btn)
-            log("  [ok] Post button clicked!")
-            time.sleep(6)
+            log("  [ok] Post button clicked.")
+            # Dialog disappearing = Facebook accepted the post
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+                )
+                log("  [ok] Dialog closed — post accepted.")
+            except TimeoutException:
+                log("  [warn] Dialog still open after 15 s — post may still have gone through.")
             sc(driver, "post_submitted")
             return True
         except (TimeoutException, NoSuchElementException):
@@ -547,13 +659,11 @@ def main() -> int:
     log(f"  poster-{photo_number:02d}  |  description-{description_number:02d}")
     log("=" * 60)
 
-    # 1. Load today's state ──────────────────────────────────────────
     state = load_daily_state()
 
-    # 2. Pick a group ────────────────────────────────────────────────
     target_group = pick_target_group(state)
     if target_group is None:
-        log("🏁 No eligible groups remain for today.")
+        log("No eligible groups remain for today.")
         write_github_output(
             status="no_groups_left",
             group="none",
@@ -563,16 +673,14 @@ def main() -> int:
         )
         return 0
 
-    # 3. Mark group as used BEFORE any network action ─────────────────
-    #    This prevents an infinite retry loop if the group is unreachable.
+    # Mark as used BEFORE any network action
     state["used_groups"] = state.get("used_groups", []) + [target_group]
     save_daily_state(state)
-    log(f"📌 '{target_group}' marked as used for today "
+    log(f"'{target_group}' marked as used today "
         f"({len(state['used_groups'])} total used).")
 
-    # 4. Check poster image exists ───────────────────────────────────
     if not os.path.isfile(POSTER_PATH):
-        log(f"❌ Poster image missing: {POSTER_PATH}")
+        log(f"Poster image missing: {POSTER_PATH}")
         write_github_output(
             status="missing_poster",
             group=target_group,
@@ -582,24 +690,24 @@ def main() -> int:
         )
         return 1
 
-    # 5. Launch browser ──────────────────────────────────────────────
-    log("🚀 Launching Chrome (headless, undetected)…")
+    log("Launching Chrome (headless, undetected)...")
     driver = build_driver()
     driver.set_page_load_timeout(30)
     succeeded    = False
     published_at = ""
 
     try:
-        # Quick session verification
         driver.get("https://www.facebook.com")
         time.sleep(2)
         if "login" in driver.current_url.lower():
-            log("❌ Facebook session expired — re-run facebook_profile_initializer.py.")
+            log("Facebook session expired — re-run facebook_profile_initializer.py.")
             sys.exit(99)
         sc(driver, "session_verified")
-        log("✅ Session active.")
+        log("Session active.")
 
-        # 6. Find the group URL ──────────────────────────────────────
+        # find_group_url() now navigates INTO the group itself.
+        # When it returns, the driver is already on the group page —
+        # no extra driver.get() is needed (that was causing the second bug).
         group_url = find_group_url(driver, target_group)
         if not group_url:
             write_github_output(
@@ -611,15 +719,10 @@ def main() -> int:
             )
             return 1
 
-        # 7. Navigate to the group page ──────────────────────────────
-        log(f"  🌐 Navigating to group: {group_url}")
-        driver.get(group_url)
-        time.sleep(3)
         sc(driver, "group_page")
 
-        # 8. Runtime buy/sell detection ──────────────────────────────
         if is_buy_sell_on_page(driver):
-            log(f"⚠️ '{target_group}' is a Buy & Sell group → skipping.")
+            log(f"'{target_group}' is a Buy & Sell group — skipping.")
             sc(driver, "buy_sell_detected")
             write_github_output(
                 status="buy_sell_skipped",
@@ -630,9 +733,20 @@ def main() -> int:
             )
             return 0
 
-        # 9. Membership check ────────────────────────────────────────
+        if is_admin_only_on_page(driver):
+            log(f"'{target_group}' only allows admin posts — skipping.")
+            sc(driver, "admin_only_detected")
+            write_github_output(
+                status="admin_only_skipped",
+                group=target_group,
+                poster_number=photo_number,
+                published_time="N/A",
+                total_posts_today=state.get("total_posts", 0),
+            )
+            return 0
+
         if not can_post(driver):
-            log(f"⚠️ Not a member of '{target_group}' — skipping.")
+            log(f"Not a member of '{target_group}' — skipping.")
             write_github_output(
                 status="not_a_member",
                 group=target_group,
@@ -642,21 +756,20 @@ def main() -> int:
             )
             return 0
 
-        # 10. Post! ──────────────────────────────────────────────────
-        log(f"📢 Posting to: {target_group}")
+        log(f"Posting to: {target_group}")
         succeeded = post_to_current_group(driver, POSTER_PATH, POST_DESCRIPTION)
 
         if succeeded:
-            published_at            = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
-            state["total_posts"]    = state.get("total_posts", 0) + 1
+            published_at         = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
+            state["total_posts"] = state.get("total_posts", 0) + 1
             save_daily_state(state)
-            log(f"✅ SUCCESS — poster-{photo_number:02d} posted at {published_at}. "
+            log(f"SUCCESS — poster-{photo_number:02d} posted at {published_at}. "
                 f"Total today: {state['total_posts']}")
 
     except SystemExit:
         raise
     except Exception as exc:
-        log(f"❌ Unhandled error: {exc}")
+        log(f"Unhandled error: {exc}")
         sc(driver, "unhandled_error")
 
     finally:

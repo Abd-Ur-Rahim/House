@@ -2,27 +2,8 @@ name: Facebook Group Poster Bot
 
 # ─────────────────────────────────────────────────────────────────────
 # Fires once every hour → 24 triggers per calendar day.
-# Each run adds a random 0–55 minute delay so posts land at truly
-# random times, not on the clock-hour boundary.
-#
-# Per-run behaviour:
-#   • Restores .group_tracker.json from cache (keyed by SLT date + run_id
-#     with a date-prefix restore-key so the latest state is always found).
-#   • Runs facebook_group_poster_bot.py which:
-#       – picks a random, un-used, non-buy/sell group
-#       – posts poster-XX.png + description-XX.txt to that ONE group
-#       – writes the result back to .group_tracker.json
-#   • Saves the updated .group_tracker.json to cache.
-#   • Sends Telegram notifications (screenshots + status message).
-#
-# ⚠️  Concurrency note:
-#   This workflow shares the same Chrome profile
-#   (profiles/facebook_stable_session) as facebook-poster-bot.yml.
-#   The two workflows use DIFFERENT concurrency groups so they can run
-#   in parallel — but if you ever run them at exactly the same second,
-#   Chrome will raise "profile already in use".  To be safe, schedule
-#   this bot at xx:30 (half-past each hour) by changing the cron below
-#   to "30 * * * *" if the marketplace bot fires on the hour.
+# Each run adds a random 0–5 minute delay so posts don't land exactly
+# on the clock-hour boundary but stay within the same hour window.
 # ─────────────────────────────────────────────────────────────────────
 
 on:
@@ -57,8 +38,6 @@ jobs:
           echo "SLT date: $SLT_DATE"
 
       # ── 2. Restore today's group tracker state ───────────────────
-      # Key includes run_id so each save is unique.
-      # restore-keys prefix picks up the most recent save for today.
       - name: Restore group tracker state
         id: cache-tracker
         uses: actions/cache/restore@v4
@@ -68,12 +47,14 @@ jobs:
           restore-keys: |
             group-tracker-${{ steps.meta.outputs.date }}-
 
-      # ── 3. Random delay (spread posts across the hour) ────────────
-      - name: Random delay (0–55 min)
+      # ── 3. Random delay (0–5 min only) ───────────────────────────
+      # Keeps the post within the same hour but avoids exact clock-hour
+      # boundary. 24 hourly triggers still give 24 posts per day.
+      - name: Random delay (0–5 min)
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            DELAY=$(( RANDOM % 3300 ))    # 0–3299 seconds ≈ 0–54 min
-            echo "💤 Sleeping ${DELAY}s (~$((DELAY / 60))m $((DELAY % 60))s)"
+            DELAY=$(( RANDOM % 300 ))    # 0–299 seconds = 0–4m 59s
+            echo "Sleeping ${DELAY}s (~$((DELAY / 60))m $((DELAY % 60))s) before posting."
             sleep "$DELAY"
           else
             echo "Manual trigger — skipping random delay."
@@ -93,12 +74,12 @@ jobs:
       - name: Seed profile from zip (if cache miss)
         run: |
           if [ -d "profiles/facebook_stable_session" ]; then
-            echo "✅ Using cached Chrome session."
+            echo "Using cached Chrome session."
           elif [ -f profiles.zip ]; then
-            echo "📦 No cache — seeding from profiles.zip"
+            echo "No cache — seeding from profiles.zip"
             unzip -o profiles.zip -d .
           else
-            echo "⚠️ No cache AND no profiles.zip — profile will be empty."
+            echo "No cache AND no profiles.zip — profile will be empty."
           fi
 
       # ── 6. System deps + Chrome ───────────────────────────────────
@@ -174,9 +155,9 @@ jobs:
 
           nohup ./xray/xray run -c xray/config.json > xray.log 2>&1 &
           sleep 3
-          echo "🛰️  Proxy started — testing connection…"
+          echo "Proxy started — testing connection..."
           curl -s --max-time 10 -x socks5://127.0.0.1:10808 https://ifconfig.me \
-            || echo "⚠️ Proxy test returned non-200 (may still work)"
+            || echo "Proxy test returned non-200 (may still work)"
 
       # ── 10. FIRST ATTEMPT ─────────────────────────────────────────
       - name: Run Group Poster Bot
@@ -207,7 +188,6 @@ jobs:
         run: |
           rm -f profiles.zip
           python3 facebook_profile_initializer.py
-          # Trim heavy cache dirs before zipping
           cd profiles/facebook_stable_session
           rm -rf "Default/Code Cache" "Default/Cache" \
                  optimization_guide_model_store component_crx_cache \
@@ -236,8 +216,6 @@ jobs:
         run: python3 facebook_group_poster_bot.py
 
       # ── 13. Save updated group tracker state ─────────────────────
-      # Runs regardless of bot outcome so the state (used groups list)
-      # is always preserved, even when posting failed.
       - name: Save group tracker state
         if: always()
         uses: actions/cache/save@v4
@@ -271,7 +249,6 @@ jobs:
           CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
           SCREENSHOT_DIR="screenshots"
 
-          # Collect all png/jpg files sorted by name
           FILES=()
           while IFS= read -r -d '' f; do
             FILES+=("$f")
@@ -283,7 +260,6 @@ jobs:
           echo "Found $TOTAL screenshot(s)."
           [ "$TOTAL" -eq 0 ] && exit 0
 
-          # Single image → sendPhoto
           if [ "$TOTAL" -eq 1 ]; then
             curl -s -X POST \
               "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
@@ -294,7 +270,6 @@ jobs:
             exit 0
           fi
 
-          # Multiple images → sendMediaGroup in batches of 10
           BATCH_SIZE=10
           i=0
           while [ $i -lt "$TOTAL" ]; do
@@ -326,24 +301,23 @@ jobs:
       - name: Send final Telegram status
         if: always()
         run: |
-          # Prefer retry outputs; fall back to first-attempt outputs
-          GROUP="${{ steps.bot_retry.outputs.group        || steps.bot.outputs.group        || 'unknown' }}"
-          POSTER="${{ steps.bot_retry.outputs.poster_number || steps.bot.outputs.poster_number || '?' }}"
-          TIME="${{ steps.bot_retry.outputs.published_time || steps.bot.outputs.published_time || 'N/A' }}"
-          STATUS="${{ steps.bot_retry.outputs.status       || steps.bot.outputs.status       || 'unknown' }}"
+          GROUP="${{ steps.bot_retry.outputs.group           || steps.bot.outputs.group           || 'unknown' }}"
+          POSTER="${{ steps.bot_retry.outputs.poster_number  || steps.bot.outputs.poster_number   || '?' }}"
+          TIME="${{ steps.bot_retry.outputs.published_time   || steps.bot.outputs.published_time  || 'N/A' }}"
+          STATUS="${{ steps.bot_retry.outputs.status         || steps.bot.outputs.status          || 'unknown' }}"
           TOTAL="${{ steps.bot_retry.outputs.total_posts_today || steps.bot.outputs.total_posts_today || '?' }}"
 
           if [ "${{ job.status }}" = "success" ]; then
             MSG="✅ *Group Poster Bot:*
-            📌 Group: ${GROUP}
-            🖼 Poster: poster-${POSTER}
-            🕐 Time: ${TIME}
-            📊 Posts today: ${TOTAL}/24"
-                      else
-                        MSG="❌ *Group Poster Bot:* Run FAILED
-            📌 Group: ${GROUP}
-            🖼 Poster: poster-${POSTER}
-            🔴 Status: ${STATUS}"
+          📌 Group: ${GROUP}
+          🖼 Poster: poster-${POSTER}
+          🕐 Time: ${TIME}
+          📊 Posts today: ${TOTAL}/24"
+          else
+            MSG="❌ *Group Poster Bot:* Run FAILED
+          📌 Group: ${GROUP}
+          🖼 Poster: poster-${POSTER}
+          🔴 Status: ${STATUS}"
           fi
 
           curl -s -X POST \
