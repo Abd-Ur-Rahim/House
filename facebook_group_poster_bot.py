@@ -372,32 +372,25 @@ def inject_text(driver, element, text: str) -> None:
     element.click()
     time.sleep(0.5)
 
-    driver.execute_script(
-        "arguments[0].focus();"
-        "document.execCommand('insertText', false, arguments[1]);",
-        element,
-        text,
-    )
-    time.sleep(0.5)
+    # Primary: Use native send_keys. This triggers OS-level keyboard events 
+    # that React/Lexical ALWAYS registers correctly.
+    try:
+        element.clear()
+        element.send_keys(text)
+        time.sleep(0.5)
+    except Exception:
+        pass
 
     current = driver.execute_script("return arguments[0].textContent;", element)
     if not current or len(current.strip()) < 5:
-        log("  [fallback] execCommand empty — using textContent + InputEvent.")
+        log("  [fallback] send_keys failed — using JS execCommand.")
         driver.execute_script(
-            """
-            var el   = arguments[0];
-            var text = arguments[1];
-            el.focus();
-            while (el.firstChild) { el.removeChild(el.firstChild); }
-            el.appendChild(document.createTextNode(text));
-            el.dispatchEvent(new InputEvent('input', {
-                bubbles: true, inputType: 'insertText', data: text
-            }));
-            """,
+            "arguments[0].focus();"
+            "document.execCommand('insertText', false, arguments[1]);",
             element,
             text,
         )
-
+        time.sleep(0.5)
 
 # ─────────────────────────────────────────────────────────────────────
 # Post composer: dialog-scoped XPaths + Lexical editor detection
@@ -554,56 +547,37 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     sc(driver, "pre_submit")
     
-    # Try a normal click first. If intercepted, fall back to JS.
+    # Force click via JS to bypass any invisible overlays
+    driver.execute_script("arguments[0].click();", post_btn)
+    log("  [ok] Post button clicked. Waiting for dialog to close (up to 90s)...")
+
+    # ── Wait for the dialog to disappear ──────────────────────────────
     try:
-        post_btn.click()
-    except ElementClickInterceptedException:
-        driver.execute_script("arguments[0].click();", post_btn)
-        
-    log("  [ok] Post button clicked. Waiting for 'Posting...' text to disappear...")
-
-    posting_text_xpath = (
-        "//div[@role='dialog']//*[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'posting')]"
-    )
-
-    # ── Wait for the "Posting..." text to disappear ───────────────────
-    try:
-        # Wait for it to appear
-        try:
-            WebDriverWait(driver, 5).until(
-                EC.visibility_of_element_located((By.XPATH, posting_text_xpath))
-            )
-            log("  [..] 'Posting...' text detected. Waiting for upload to finish (up to 90s)...")
-        except TimeoutException:
-            pass # Might have processed very fast
-
-        # Wait for it to disappear (max 90 seconds)
         WebDriverWait(driver, 90).until(
-            EC.invisibility_of_element_located((By.XPATH, posting_text_xpath))
+            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
         )
-        log("  [ok] 'Posting...' text disappeared. Post submitted successfully.")
+        log("  [ok] Dialog closed. Post submitted successfully.")
         sc(driver, "post_submitted")
         return True
         
     except TimeoutException:
-        log("  [WARN] 'Posting...' text stuck for 90s. Forcing page refresh to break lock...")
-        sc(driver, "post_text_stuck")
+        log("  [WARN] Dialog stuck open for 90s. Forcing page refresh to break lock...")
+        sc(driver, "post_dialog_stuck")
         
         # Force a refresh. If the post went through, the feed will reload with it.
         driver.refresh()
-        time.sleep(3)
+        time.sleep(4)
         
-        # Check if the post actually made it to the feed despite the stuck text
+        # Check if the post actually made it to the feed despite the stuck dialog
         try:
             body_text = driver.execute_script("return document.body.innerText.toLowerCase();")
-            # Use the first 60 chars of your description as a probe
             probe = " ".join(text.split())[:60].lower()
             
             if probe in body_text:
                 log("  [ok] Post verified in feed after forced refresh!")
                 return True
             else:
-                log("  [FAIL] Post NOT in feed after refresh. It likely failed to upload.")
+                log("  [FAIL] Post NOT in feed after refresh. It likely failed.")
                 return False
         except Exception:
             log("  [FAIL] Could not verify post after refresh.")
