@@ -196,7 +196,7 @@ def build_driver() -> Driver:
         headless=True,
         user_data_dir=profile_path,
         proxy=proxy,
-        block_images=True,
+        # block_images=True,
     )
 
 
@@ -573,11 +573,12 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             WebDriverWait(driver, 5).until(
                 EC.visibility_of_element_located((By.XPATH, posting_text_xpath))
             )
+            log("  [..] 'Posting...' text detected. Waiting for upload to finish (up to 90s)...")
         except TimeoutException:
             pass # Might have processed very fast
 
-        # Wait for it to disappear (max 45 seconds to prevent infinite hangs)
-        WebDriverWait(driver, 45).until(
+        # Wait for it to disappear (max 90 seconds)
+        WebDriverWait(driver, 90).until(
             EC.invisibility_of_element_located((By.XPATH, posting_text_xpath))
         )
         log("  [ok] 'Posting...' text disappeared. Post submitted successfully.")
@@ -585,7 +586,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         return True
         
     except TimeoutException:
-        log("  [WARN] 'Posting...' text stuck for 45s. Forcing page refresh to break lock...")
+        log("  [WARN] 'Posting...' text stuck for 90s. Forcing page refresh to break lock...")
         sc(driver, "post_text_stuck")
         
         # Force a refresh. If the post went through, the feed will reload with it.
