@@ -275,21 +275,22 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
         group_url = group_url.rstrip("/") + "/"
 
     log(f"  Navigating directly to: {group_url}")
-    driver.get(group_url)
+    
+    try:
+        driver.get(group_url)
+    except TimeoutException:
+        log("  Page load took too long, but checking if DOM is ready anyway...")
 
     try:
-        WebDriverWait(driver, 20).until(
+        # Wait up to 40 seconds for the URL to settle into the group
+        WebDriverWait(driver, 40).until(
             lambda d: "/groups/" in d.current_url
                       and "/search/" not in d.current_url
                       and "/login" not in d.current_url.lower()
         )
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//div[@role='main']"))
-        )
-        # Wait for the composer or feed to be present instead of sleeping
-        WebDriverWait(driver, 10).until(
-            lambda d: d.find_elements(By.XPATH, "//div[@role='main']//div[contains(@aria-label, 'Create') or contains(text(), 'Write something')]") or 
-                      d.find_elements(By.XPATH, "//div[@aria-label='Feed']")
+        # Wait up to 30 seconds for the main container to be visible
+        WebDriverWait(driver, 30).until(
+            EC.visibility_of_element_located((By.XPATH, "//div[@role='main']"))
         )
     except TimeoutException:
         log("  Timed out waiting for group page.")
@@ -592,7 +593,7 @@ def main() -> int:
 
     log("Launching Chrome (headless, undetected)...")
     driver = build_driver()
-    driver.set_page_load_timeout(30)
+    driver.set_page_load_timeout(60)
     succeeded    = False
     published_at = ""
 
