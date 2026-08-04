@@ -454,7 +454,7 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
         # Watch for the 'Posting...' indicator to appear then disappear —
         # more reliable than watching the whole dialog since Facebook sometimes
         # keeps an outer dialog shell open while the post is processing.
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver,90).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//*[contains(text(),'Posting')]")
             )
