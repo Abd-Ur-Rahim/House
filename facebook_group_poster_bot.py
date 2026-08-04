@@ -3,17 +3,6 @@
 Facebook Group Poster Bot  (URL-based edition)
 ==============================================
 Posts a random poster + description directly into ONE Facebook group per run.
-
-CHANGES vs previous version
----------------------------
-• TARGET_GROUPS is now a list of direct Facebook group URLs instead of
-  group names.  The bot navigates straight to each URL — no search step.
-• find_group_url() replaced by navigate_to_group() — simply does
-  driver.get(url) and waits for the group page to load.
-• is_buy_sell_by_name() removed (no group names to check).  Runtime
-  page-content checks (is_buy_sell_on_page, is_admin_only_on_page,
-  can_post) remain unchanged and still run after landing on the group.
-• urllib.parse import removed (no longer needed).
 """
 
 import json
@@ -161,16 +150,15 @@ def save_daily_state(state: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Group selection logic  (URL-based — no name filtering)
+# Group selection logic
 # ─────────────────────────────────────────────────────────────────────
 def extract_group_id(url: str) -> str:
-    """Extract the group ID / slug from a Facebook group URL for logging."""
     parts = url.rstrip("/").split("/")
     return parts[-1] if parts else url
 
 
 def pick_target_group(state: dict) -> "str | None":
-    used        = set(state.get("used_groups", []))
+    used       = set(state.get("used_groups", []))
     candidates = [g for g in TARGET_GROUPS if g not in used]
     if not candidates:
         log("All eligible groups have been used today.")
@@ -184,6 +172,10 @@ def pick_target_group(state: dict) -> "str | None":
 # ─────────────────────────────────────────────────────────────────────
 # Browser / driver helpers
 # ─────────────────────────────────────────────────────────────────────
+def is_proxy_active() -> bool:
+    return bool(os.environ.get("PROXY_HOST") and os.environ.get("PROXY_PORT"))
+
+
 def build_driver() -> Driver:
     profile_path = os.path.join(base_dir, "profiles", "facebook_stable_session")
     if not os.path.isdir(profile_path):
@@ -198,7 +190,6 @@ def build_driver() -> Driver:
         headless=True,
         user_data_dir=profile_path,
         proxy=proxy,
-        # block_images=True,
     )
 
 
@@ -261,7 +252,10 @@ def is_admin_only_on_page(driver) -> bool:
         return True
     except NoSuchElementException:
         pass
+
+    # Give the page time to render before using the heuristic
     time.sleep(2)
+
     has_composer = bool(driver.find_elements(
         By.XPATH,
         "//div[@role='main']//*["
@@ -289,16 +283,9 @@ def is_admin_only_on_page(driver) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# NAVIGATION: navigate_to_group() — direct URL, no search
+# Navigation
 # ─────────────────────────────────────────────────────────────────────
 def navigate_to_group(driver, group_url: str) -> "str | None":
-    """
-    Navigate directly to the given Facebook group URL and wait for the
-    group page to finish loading.  Returns the final URL (after any
-    redirects) or None on failure.
-
-    The driver is already on the group page when this returns.
-    """
     group_url = group_url.replace("web.facebook.com", "www.facebook.com")
     if not group_url.rstrip("/").endswith("/"):
         group_url = group_url.rstrip("/") + "/"
@@ -318,12 +305,10 @@ def navigate_to_group(driver, group_url: str) -> "str | None":
         time.sleep(2)
     except TimeoutException:
         log("  Timed out waiting for group page.")
-        # sc(driver, "group_page_timeout")
         return None
 
     final_url = driver.current_url
     log(f"  Group page loaded: {final_url}")
-    # sc(driver, "group_page_loaded")
     return final_url
 
 
@@ -365,21 +350,19 @@ def can_post(driver) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# contenteditable text injection (React / Lexical compatible)
+# Text injection (React / Lexical compatible)
 # ─────────────────────────────────────────────────────────────────────
 def inject_text(driver, element, text: str) -> None:
-    """Reliably insert text into a contenteditable / Lexical editor."""
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
     time.sleep(0.3)
 
-    # 1. Click to focus
     try:
         element.click()
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
     time.sleep(0.4)
 
-    # 2. Select all existing content and delete it (works on contenteditable)
+    # Select all + delete works on contenteditable (unlike .clear())
     ActionChains(driver)\
         .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
         .perform()
@@ -387,16 +370,15 @@ def inject_text(driver, element, text: str) -> None:
     ActionChains(driver).send_keys(Keys.DELETE).perform()
     time.sleep(0.2)
 
-    # 3. Type text in chunks to avoid dropped characters on long strings
+    # Send in chunks to avoid dropped characters on long strings
     chunk_size = 200
     for i in range(0, len(text), chunk_size):
-        chunk = text[i:i + chunk_size]
-        ActionChains(driver).send_keys(chunk).perform()
+        ActionChains(driver).send_keys(text[i:i + chunk_size]).perform()
         time.sleep(0.15)
 
     time.sleep(0.5)
 
-    # 4. Verify — fallback to execCommand if ActionChains failed
+    # Fallback: execCommand if ActionChains produced nothing
     current = driver.execute_script("return arguments[0].textContent;", element)
     if not current or len(current.strip()) < 5:
         log("  [fallback] ActionChains failed — using execCommand.")
@@ -411,9 +393,160 @@ def inject_text(driver, element, text: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Post composer: dialog-scoped XPaths + Lexical editor detection
+# Proxy-aware upload / submit helpers
+# ─────────────────────────────────────────────────────────────────────
+def wait_for_post_button_enabled(driver, timeout: int = 90) -> bool:
+    """
+    Poll until the Post button's aria-disabled attribute is gone.
+    Facebook sets aria-disabled='true' while the photo is uploading
+    to its servers — EC.element_to_be_clickable does NOT catch this.
+    """
+    log("  Waiting for Post button to become enabled (server upload)...")
+    post_btn_xpaths = [
+        "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
+        "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Post']]",
+        "//div[@role='dialog']//button[@aria-label='Post']",
+        "//div[@role='dialog']//button[.//span[normalize-space()='Post']]",
+        "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
+    ]
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for xp in post_btn_xpaths:
+            for btn in driver.find_elements(By.XPATH, xp):
+                try:
+                    if (btn.get_attribute("aria-disabled") != "true"
+                            and btn.get_attribute("disabled") is None
+                            and btn.is_displayed()):
+                        log("  [ok] Post button is enabled — upload complete.")
+                        return True
+                except StaleElementReferenceException:
+                    continue
+        time.sleep(1.5)
+
+    log("  [FAIL] Post button never became enabled within timeout.")
+    return False
+
+
+def wait_for_upload_spinner_gone(driver, timeout: int = 60) -> None:
+    """Wait for Facebook's upload progress spinners to disappear."""
+    spinner_xpaths = [
+        "//div[@role='dialog']//div[@role='progressbar']",
+        "//div[@role='dialog']//div[@data-visualcompletion='loading-state']",
+        "//div[@role='dialog']//svg[contains(@class,'spinner')]",
+    ]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not any(driver.find_elements(By.XPATH, xp) for xp in spinner_xpaths):
+            log("  [ok] No upload spinners detected.")
+            return
+        time.sleep(1)
+    log("  [WARN] Spinner still visible after timeout — continuing anyway.")
+
+
+def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool, float]":
+    """
+    Wait for the post dialog to close naturally.
+    Returns (closed_naturally, elapsed_seconds).
+    """
+    start = time.time()
+    try:
+        # Watch for the 'Posting...' indicator to appear then disappear —
+        # more reliable than watching the whole dialog since Facebook sometimes
+        # keeps an outer dialog shell open while the post is processing.
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//*[contains(text(),'Posting')]")
+            )
+        )
+        log("  [ok] 'Posting...' indicator seen — upload in progress.")
+    except TimeoutException:
+        pass  # Some FB versions skip this indicator, that's fine
+
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+        )
+        return True, time.time() - start
+    except TimeoutException:
+        return False, time.time() - start
+
+
+def force_close_dialog(driver) -> bool:
+    """
+    Forcefully close a stuck dialog using multiple fallback methods.
+    Returns True if the dialog is gone afterward.
+    """
+    # Method 1: Escape key
+    try:
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(2)
+        if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+            log("  [close] Dialog closed via Escape key.")
+            return True
+    except Exception:
+        pass
+
+    # Method 2: Click the X / close button
+    for xp in [
+        "//div[@role='dialog']//div[@aria-label='Close']",
+        "//div[@role='dialog']//div[@aria-label='close']",
+        "//div[@role='dialog']//div[@role='button'][@aria-label='Close']",
+    ]:
+        for btn in driver.find_elements(By.XPATH, xp):
+            try:
+                driver.execute_script("arguments[0].click();", btn)
+                time.sleep(2)
+                if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+                    log("  [close] Dialog closed via close button.")
+                    return True
+            except Exception:
+                continue
+
+    # Method 3: Remove from DOM entirely
+    try:
+        removed = driver.execute_script("""
+            var dialogs = document.querySelectorAll('[role="dialog"]');
+            dialogs.forEach(d => d.parentNode && d.parentNode.removeChild(d));
+            return dialogs.length;
+        """)
+        log(f"  [close] Removed {removed} dialog(s) from DOM via JS.")
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
+def verify_post_in_feed(driver, text: str, max_wait: int = 30) -> bool:
+    """Poll the page body for the first 40 chars of the post description."""
+    probe    = " ".join(text.split())[:40].lower()
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            if probe in driver.execute_script(
+                "return document.body.innerText.toLowerCase();"
+            ):
+                log(f"  [verify] Post text found in feed: '{probe[:30]}...'")
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Post composer
 # ─────────────────────────────────────────────────────────────────────
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
+
+    proxy_mode   = is_proxy_active()
+    upload_wait  = 120 if proxy_mode else 60   # aria-disabled poll timeout
+    submit_wait  = 180 if proxy_mode else 90   # dialog-close timeout
+    extra_buffer = 4   if proxy_mode else 1    # settle buffer after upload
+
+    if proxy_mode:
+        log("  [proxy] Proxy mode active — using extended timeouts.")
 
     # ── Step 1: Open composer ─────────────────────────────────────────
     log("  [1/4] Opening post composer dialog...")
@@ -457,21 +590,20 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         sc(driver, "dialog_not_found")
         return False
 
-    # ── Step 2: Add photo ─────────────────────────────────────────────
+    # ── Step 2: Attach photo (bypass OS file dialog entirely) ─────────
     log("  [2/4] Attaching photo (bypassing OS dialog)...")
-    
-    # Step 1: Make the hidden file input interactable via JS — no button click needed
+
+    # The hidden <input type="file"> exists in the DOM from dialog open —
+    # send_keys() on it delivers the path without ever opening the OS picker.
     try:
-        # Wait for the file input to exist in the dialog DOM
         file_input = WebDriverWait(driver, 15).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//div[@role='dialog']//input[@type='file']")
             )
         )
     except TimeoutException:
-        # File input not pre-loaded — need to click button to inject it,
-        # but use JS click so it does NOT open the OS dialog
-        log("  File input not in DOM yet — injecting via JS click on button...")
+        # Not pre-loaded — JS-click the button to inject it (no OS dialog)
+        log("  File input not in DOM — JS-clicking photo button...")
         photo_btn_xpaths = [
             "//div[@role='dialog']//div[@aria-label='Photo/video']",
             "//div[@role='dialog']//div[@aria-label='Photo or video']",
@@ -482,12 +614,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         for xp in photo_btn_xpaths:
             btns = driver.find_elements(By.XPATH, xp)
             if btns:
-                # JS click bypasses Selenium's normal click — avoids OS dialog
                 driver.execute_script("arguments[0].click();", btns[0])
                 log("  [ok] Photo button JS-clicked (no OS dialog).")
                 time.sleep(1)
                 break
-    
+
         try:
             file_input = WebDriverWait(driver, 12).until(
                 EC.presence_of_element_located(
@@ -495,11 +626,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 )
             )
         except TimeoutException:
-            log("  [FAIL] File input still not found after JS click.")
+            log("  [FAIL] File input not found after JS click.")
             sc(driver, "file_input_fail")
             return False
-    
-    # Step 2: Strip the CSS that hides it so Selenium can interact with it
+
+    # Make the hidden input interactable so send_keys works
     driver.execute_script("""
         var el = arguments[0];
         el.style.display    = 'block';
@@ -513,13 +644,12 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         el.style.zIndex     = '9999';
     """, file_input)
     time.sleep(0.5)
-    
-    # Step 3: Send file path — this NEVER opens the OS dialog
+
     abs_path = os.path.abspath(image_path)
     file_input.send_keys(abs_path)
-    log(f"  [ok] File path sent silently: {os.path.basename(abs_path)}")
-    
-    # Step 4: Wait for photo preview to confirm it was accepted
+    log(f"  [ok] File sent silently: {os.path.basename(abs_path)}")
+
+    # Wait for browser-side preview (confirms file was accepted locally)
     log("  Waiting for photo preview...")
     try:
         WebDriverWait(driver, 30).until(
@@ -530,29 +660,36 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 "    or contains(@src,'fbcdn')]"
             ))
         )
-        log("  [ok] Photo preview visible — file accepted.")
+        log("  [ok] Photo preview visible.")
     except TimeoutException:
-        log("  [WARN] Photo preview not seen in 30s — continuing.")
+        log("  [WARN] Preview not seen in 30s — continuing.")
         sc(driver, "photo_preview_timeout")
-    
-    time.sleep(2)   # let the dialog settle after photo attaches
-    
-    # ── Step 3: Insert description into POST text (not caption) ───────
-    log("  [3/4] Inserting description into post editor...")
 
-    # Target the FIRST Lexical editor which is the main post text box.
-    # After photo upload Facebook shows: [post text editor] then [caption editor].
-    # We explicitly want index [1] (first match = post text).
+    # Wait for spinners to clear (server-side upload done)
+    wait_for_upload_spinner_gone(driver, timeout=60)
+
+    # ── KEY FIX: Poll aria-disabled until Post button is truly enabled ─
+    # EC.element_to_be_clickable ignores aria-disabled='true' — we must
+    # check it manually. Facebook keeps the button disabled until the
+    # server confirms the photo upload, which is slow through a proxy.
+    if not wait_for_post_button_enabled(driver, timeout=upload_wait):
+        log("  [FAIL] Post button never became enabled — upload may have failed.")
+        sc(driver, "post_btn_disabled_timeout")
+        return False
+
+    # Extra settle time — proxy connections can cause button-state flicker
+    time.sleep(extra_buffer)
+
+    # ── Step 3: Insert description ────────────────────────────────────
+    log("  [3/4] Inserting description into post editor...")
     editor_xpaths = [
-        # Most specific — Lexical editor explicitly for the post (aria-label)
+        # Most specific — post-level Lexical editor (skip caption boxes)
         "//div[@role='dialog']//div[@data-lexical-editor='true']"
         "    [@aria-label and not(contains(@aria-label,'caption'))"
         "               and not(contains(@aria-label,'Caption'))]",
-        # First Lexical editor in the dialog (post text, above photo preview)
+        # First Lexical editor in dialog = post text (above photo preview)
         "(//div[@role='dialog']//div[@data-lexical-editor='true'])[1]",
-        # Generic textbox fallback
         "(//div[@role='dialog']//div[@role='textbox' and @contenteditable='true'])[1]",
-        # notranslate class (older Facebook layout)
         "(//div[@role='dialog']//div[@contenteditable='true']"
         "    [contains(@class,'notranslate')])[1]",
     ]
@@ -563,9 +700,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             tb = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, xp))
             )
-
-            # Extra guard: skip if this is inside a caption/comment container
-            is_caption_or_comment = driver.execute_script(
+            is_bad = driver.execute_script(
                 """
                 var el = arguments[0];
                 while (el) {
@@ -578,34 +713,38 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 """,
                 tb,
             )
-            if is_caption_or_comment:
-                log("  [skip] Matched a caption/comment box — trying next XPath.")
+            if is_bad:
+                log("  [skip] Caption/comment box — trying next.")
                 continue
 
             inject_text(driver, tb, text)
-
-            actual = driver.execute_script(
-                "return arguments[0].textContent;", tb
-            )
+            actual = driver.execute_script("return arguments[0].textContent;", tb)
             if actual and len(actual.strip()) > 5:
                 log(f"  [ok] Description inserted ({len(text)} chars). "
                     f"Verified: '{actual[:40]}...'")
                 text_added = True
                 break
             else:
-                log("  [warn] Text box still empty after inject — trying next XPath.")
+                log("  [warn] Text box empty after inject — trying next XPath.")
                 sc(driver, "text_inject_empty")
         except (TimeoutException, NoSuchElementException):
             continue
 
     if not text_added:
-        log("  [WARN] Could not verify text was inserted. Proceeding anyway.")
+        log("  [WARN] Could not verify text insertion — proceeding anyway.")
         sc(driver, "text_not_verified")
 
     time.sleep(random.uniform(1.0, 2.0))
 
     # ── Step 4: Submit ────────────────────────────────────────────────
     log("  [4/4] Submitting post...")
+
+    # Re-confirm button is still enabled right before clicking
+    if not wait_for_post_button_enabled(driver, timeout=30):
+        log("  [FAIL] Post button disabled again before click.")
+        sc(driver, "post_btn_redisabled")
+        return False
+
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
         "//div[@role='dialog']//button[@aria-label='Post']",
@@ -613,65 +752,87 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         "//div[@role='dialog']//button[.//span[normalize-space()='Post']]",
         "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
     ]
-
     post_btn = None
     for xp in post_btn_xpaths:
         try:
-            post_btn = WebDriverWait(driver, 20).until(
+            btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, xp))
             )
-            log("  [ok] Post button found and enabled.")
-            break
+            if btn.get_attribute("aria-disabled") != "true":
+                post_btn = btn
+                break
         except TimeoutException:
             continue
 
     if not post_btn:
-        log("  [FAIL] Could not find an enabled Post button.")
+        log("  [FAIL] Post button not found at submit time.")
         sc(driver, "post_btn_fail")
         return False
 
     sc(driver, "pre_submit")
     driver.execute_script("arguments[0].click();", post_btn)
-    log("  [ok] Post button clicked. Waiting for dialog to close (up to 90s)...")
+    log(f"  [ok] Post button clicked. Waiting up to {submit_wait}s...")
 
-    try:
-        WebDriverWait(driver, 90).until(
-            EC.invisibility_of_element_located((By.XPATH, "//*[text()='Posting']"))
-        )
-        log("  [ok] Dialog closed — post submitted successfully.")
+    # ── Wait for dialog to close naturally ────────────────────────────
+    closed_naturally, elapsed = wait_for_dialog_close_or_timeout(
+        driver, timeout=submit_wait
+    )
+
+    if closed_naturally:
+        log(f"  [ok] Dialog closed in {elapsed:.1f}s — post submitted!")
         sc(driver, "post_submitted")
         return True
 
-    except TimeoutException:
-        log("  [WARN] Dialog stuck open for 90s — forcing page refresh...")
-        sc(driver, "post_dialog_stuck")
-        driver.refresh()
-        time.sleep(4)
+    # ── Dialog stuck — proxy delayed server response ──────────────────
+    log(f"  [WARN] Dialog open after {elapsed:.1f}s. Checking if post went through...")
+    sc(driver, "dialog_stuck_proxy")
 
-        try:
-            body_text = driver.execute_script(
-                "return document.body.innerText.toLowerCase();"
-            )
-            probe = " ".join(text.split())[:60].lower()
-            if probe in body_text:
-                log("  [ok] Post verified in feed after forced refresh!")
-                return True
-            else:
-                log("  [FAIL] Post NOT in feed after refresh.")
-                return False
-        except Exception:
-            log("  [FAIL] Could not verify post after refresh.")
-            return False
+    # Recovery 1: Refresh and check feed
+    driver.refresh()
+    time.sleep(5 if proxy_mode else 3)
+    if verify_post_in_feed(driver, text, max_wait=20):
+        log("  [ok] Post CONFIRMED in feed after refresh — SUCCESS!")
+        sc(driver, "post_verified_after_refresh")
+        return True
+
+    # Recovery 2: Force-close dialog, check feed without refresh
+    log("  Post not found yet — force-closing dialog...")
+    force_close_dialog(driver)
+    time.sleep(3)
+    if verify_post_in_feed(driver, text, max_wait=15):
+        log("  [ok] Post CONFIRMED in feed after force-close — SUCCESS!")
+        return True
+
+    # Recovery 3: Wait longer for proxy to deliver response, then refresh
+    log("  Waiting 20s more for proxy to deliver response...")
+    time.sleep(20)
+    driver.refresh()
+    time.sleep(5)
+    if verify_post_in_feed(driver, text, max_wait=15):
+        log("  [ok] Post CONFIRMED in feed after extended wait — SUCCESS!")
+        sc(driver, "post_verified_extended")
+        return True
+
+    log("  [FAIL] Post not confirmed in feed after all recovery strategies.")
+    sc(driver, "post_failed_proxy")
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────
 def main() -> int:
+    log("=" * 60)
+    log("Facebook Group Poster Bot — starting")
+    log(f"  poster-{photo_number:02d}  |  description-{description_number:02d}"
+        f"  |  proxy={'yes' if is_proxy_active() else 'no'}")
+    log("=" * 60)
+
     state = load_daily_state()
+
     driver = build_driver()
     driver.set_page_load_timeout(30)
-    succeeded = False
+    succeeded    = False
     published_at = ""
     target_group = None
 
@@ -679,17 +840,18 @@ def main() -> int:
         driver.get("https://www.facebook.com")
         time.sleep(2)
         if "login" in driver.current_url.lower():
-            log("Facebook session expired.")
+            log("Facebook session expired — re-run facebook_profile_initializer.py.")
             sys.exit(99)
+        log("Session active.")
 
-        # ── Keep trying groups until one succeeds or none remain ──────
+        # ── Try groups in a loop — skip bad ones, stop after first post ──
         while True:
             target_group = pick_target_group(state)
             if target_group is None:
                 log("No eligible groups remain for today.")
                 break
 
-            # Mark used BEFORE navigating (prevents re-pick on exception)
+            # Mark used BEFORE navigating — prevents infinite re-pick on crash
             state["used_groups"] = state.get("used_groups", []) + [target_group]
             save_daily_state(state)
 
@@ -700,38 +862,40 @@ def main() -> int:
             group_url = navigate_to_group(driver, target_group)
             if not group_url:
                 log("Navigation failed — trying next group.")
-                continue   # ← skips to next instead of exiting
+                continue
 
             if is_buy_sell_on_page(driver):
                 log(f"'{extract_group_id(target_group)}' is Buy & Sell — skipping.")
-                continue   # ← skips to next
+                continue
 
             if is_admin_only_on_page(driver):
                 log(f"'{extract_group_id(target_group)}' is admin-only — skipping.")
-                continue   # ← skips to next
+                continue
 
             if not can_post(driver):
                 log(f"Not a member of '{extract_group_id(target_group)}' — skipping.")
-                continue   # ← skips to next
+                continue
 
-            # ── All checks passed — attempt the post ──────────────────
             log(f"Posting to: {extract_group_id(target_group)}")
             succeeded = post_to_current_group(driver, POSTER_PATH, POST_DESCRIPTION)
 
             if succeeded:
-                published_at = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
+                published_at         = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
                 state["total_posts"] = state.get("total_posts", 0) + 1
                 save_daily_state(state)
                 log(f"SUCCESS — poster-{photo_number:02d} posted at {published_at}. "
                     f"Total today: {state['total_posts']}")
-            break   # ← stop after one successful (or attempted) post
+            break  # stop after one attempt (successful or not)
 
     except SystemExit:
         raise
     except Exception as exc:
         log(f"Unhandled error: {exc}")
+        sc(driver, "unhandled_error")
+
     finally:
         if succeeded:
+            log("Holding 5s to finish network requests...")
             time.sleep(5)
         try:
             driver.quit()
@@ -746,8 +910,9 @@ def main() -> int:
         status=status_label,
         total_posts_today=state.get("total_posts", 0),
     )
+    log("=" * 60)
     log(f"Run finished — {status_label}")
-
+    log("=" * 60)
     return 0 if succeeded else 1
 
 
