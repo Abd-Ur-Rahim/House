@@ -34,6 +34,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from seleniumbase import Driver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 
 # ─────────────────────────────────────────────────────────────────────
 # Paths & runtime constants
@@ -220,8 +222,7 @@ def click_safe(driver, element) -> None:
 def is_buy_sell_on_page(driver) -> bool:
     indicators = driver.find_elements(
         By.XPATH,
-        "//span[contains(text(), 'Sell something')"
-        "    or contains(text(), 'List an item')"
+        "//span[contains(text(),'Sell Something')"
         "    or contains(text(), 'Add price')]",
     )
     return len(indicators) > 0
@@ -260,7 +261,7 @@ def is_admin_only_on_page(driver) -> bool:
         return True
     except NoSuchElementException:
         pass
-
+    time.sleep(2)
     has_composer = bool(driver.find_elements(
         By.XPATH,
         "//div[@role='main']//*["
@@ -367,35 +368,54 @@ def can_post(driver) -> bool:
 # contenteditable text injection (React / Lexical compatible)
 # ─────────────────────────────────────────────────────────────────────
 def inject_text(driver, element, text: str) -> None:
+    """Reliably insert text into a contenteditable / Lexical editor."""
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
     time.sleep(0.3)
-    element.click()
+
+    # 1. Click to focus
+    try:
+        element.click()
+    except ElementClickInterceptedException:
+        driver.execute_script("arguments[0].click();", element)
+    time.sleep(0.4)
+
+    # 2. Select all existing content and delete it (works on contenteditable)
+    ActionChains(driver)\
+        .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
+        .perform()
+    time.sleep(0.2)
+    ActionChains(driver).send_keys(Keys.DELETE).perform()
+    time.sleep(0.2)
+
+    # 3. Type text in chunks to avoid dropped characters on long strings
+    chunk_size = 200
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i:i + chunk_size]
+        ActionChains(driver).send_keys(chunk).perform()
+        time.sleep(0.15)
+
     time.sleep(0.5)
 
-    # Primary: Use native send_keys. This triggers OS-level keyboard events 
-    # that React/Lexical ALWAYS registers correctly.
-    try:
-        element.clear()
-        element.send_keys(text)
-        time.sleep(0.5)
-    except Exception:
-        pass
-
+    # 4. Verify — fallback to execCommand if ActionChains failed
     current = driver.execute_script("return arguments[0].textContent;", element)
     if not current or len(current.strip()) < 5:
-        log("  [fallback] send_keys failed — using JS execCommand.")
+        log("  [fallback] ActionChains failed — using execCommand.")
         driver.execute_script(
             "arguments[0].focus();"
+            "document.execCommand('selectAll', false, null);"
+            "document.execCommand('delete', false, null);"
             "document.execCommand('insertText', false, arguments[1]);",
-            element,
-            text,
+            element, text,
         )
         time.sleep(0.5)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Post composer: dialog-scoped XPaths + Lexical editor detection
 # ─────────────────────────────────────────────────────────────────────
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
+
+    # ── Step 1: Open composer ─────────────────────────────────────────
     log("  [1/4] Opening post composer dialog...")
     trigger_xpaths = [
         "//div[@role='main']//div[@role='button']"
@@ -411,7 +431,9 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     opened = False
     for xp in trigger_xpaths:
         try:
-            el = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            el = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.XPATH, xp))
+            )
             click_safe(driver, el)
             opened = True
             log("  [ok] Composer trigger clicked.")
@@ -420,8 +442,8 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             continue
 
     if not opened:
-        # sc(driver, "composer_trigger_fail")
         log("  [FAIL] Could not click the post composer trigger.")
+        sc(driver, "composer_trigger_fail")
         return False
 
     try:
@@ -431,54 +453,108 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         time.sleep(1.5)
         log("  [ok] Composer dialog is open.")
     except TimeoutException:
-        # sc(driver, "dialog_not_found")
         log("  [FAIL] Post composer dialog did not appear.")
+        sc(driver, "dialog_not_found")
         return False
 
-    # sc(driver, "composer_open")
-
-    log("  [2/4] Attaching photo...")
-    photo_btn_xpaths = [
-        "//div[@role='dialog']//div[@aria-label='Photo/video']",
-        "//div[@role='dialog']//div[@aria-label='Photo or video']",
-        "//div[@role='dialog']//span[normalize-space()='Photo/video']",
-        "//div[@role='dialog']//span[contains(text(),'Photo')"
-        "                            and not(contains(text(),'Tag'))]",
-    ]
-    for xp in photo_btn_xpaths:
-        try:
-            btn = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((By.XPATH, xp)))
-            click_safe(driver, btn)
-            log("  [ok] Photo/video button clicked.")
-            time.sleep(1.5)
-            break
-        except (TimeoutException, NoSuchElementException):
-            continue
-
+    # ── Step 2: Add photo ─────────────────────────────────────────────
+    log("  [2/4] Attaching photo (bypassing OS dialog)...")
+    
+    # Step 1: Make the hidden file input interactable via JS — no button click needed
     try:
-        file_input = WebDriverWait(driver, 12).until(
+        # Wait for the file input to exist in the dialog DOM
+        file_input = WebDriverWait(driver, 15).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//div[@role='dialog']//input[@type='file']")
             )
         )
-        abs_path = os.path.abspath(image_path)
-        file_input.send_keys(abs_path)
-        log(f"  [ok] File queued: {os.path.basename(abs_path)}")
-        time.sleep(5)
     except TimeoutException:
-        # sc(driver, "file_input_fail")
-        log("  [FAIL] File input not found inside dialog.")
-        return False
-
-    # sc(driver, "photo_uploaded")
-
+        # File input not pre-loaded — need to click button to inject it,
+        # but use JS click so it does NOT open the OS dialog
+        log("  File input not in DOM yet — injecting via JS click on button...")
+        photo_btn_xpaths = [
+            "//div[@role='dialog']//div[@aria-label='Photo/video']",
+            "//div[@role='dialog']//div[@aria-label='Photo or video']",
+            "//div[@role='dialog']//span[normalize-space()='Photo/video']",
+            "//div[@role='dialog']//span[contains(text(),'Photo')"
+            "                            and not(contains(text(),'Tag'))]",
+        ]
+        for xp in photo_btn_xpaths:
+            btns = driver.find_elements(By.XPATH, xp)
+            if btns:
+                # JS click bypasses Selenium's normal click — avoids OS dialog
+                driver.execute_script("arguments[0].click();", btns[0])
+                log("  [ok] Photo button JS-clicked (no OS dialog).")
+                time.sleep(1)
+                break
+    
+        try:
+            file_input = WebDriverWait(driver, 12).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//div[@role='dialog']//input[@type='file']")
+                )
+            )
+        except TimeoutException:
+            log("  [FAIL] File input still not found after JS click.")
+            sc(driver, "file_input_fail")
+            return False
+    
+    # Step 2: Strip the CSS that hides it so Selenium can interact with it
+    driver.execute_script("""
+        var el = arguments[0];
+        el.style.display    = 'block';
+        el.style.visibility = 'visible';
+        el.style.opacity    = '1';
+        el.style.position   = 'fixed';
+        el.style.top        = '0';
+        el.style.left       = '0';
+        el.style.width      = '1px';
+        el.style.height     = '1px';
+        el.style.zIndex     = '9999';
+    """, file_input)
+    time.sleep(0.5)
+    
+    # Step 3: Send file path — this NEVER opens the OS dialog
+    abs_path = os.path.abspath(image_path)
+    file_input.send_keys(abs_path)
+    log(f"  [ok] File path sent silently: {os.path.basename(abs_path)}")
+    
+    # Step 4: Wait for photo preview to confirm it was accepted
+    log("  Waiting for photo preview...")
+    try:
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//div[@role='dialog']//img[contains(@src,'blob:')"
+                "    or contains(@src,'scontent')"
+                "    or contains(@src,'fbcdn')]"
+            ))
+        )
+        log("  [ok] Photo preview visible — file accepted.")
+    except TimeoutException:
+        log("  [WARN] Photo preview not seen in 30s — continuing.")
+        sc(driver, "photo_preview_timeout")
+    
+    time.sleep(2)   # let the dialog settle after photo attaches
+    
+    # ── Step 3: Insert description into POST text (not caption) ───────
     log("  [3/4] Inserting description into post editor...")
+
+    # Target the FIRST Lexical editor which is the main post text box.
+    # After photo upload Facebook shows: [post text editor] then [caption editor].
+    # We explicitly want index [1] (first match = post text).
     editor_xpaths = [
-        "//div[@role='dialog']//div[@data-lexical-editor='true']",
-        "//div[@role='dialog']//div[@role='textbox' and @contenteditable='true']",
-        "//div[@role='dialog']//div[@contenteditable='true'"
-        "                        and contains(@class,'notranslate')]",
-        "//div[@role='dialog']//div[@contenteditable='true'][1]",
+        # Most specific — Lexical editor explicitly for the post (aria-label)
+        "//div[@role='dialog']//div[@data-lexical-editor='true']"
+        "    [@aria-label and not(contains(@aria-label,'caption'))"
+        "               and not(contains(@aria-label,'Caption'))]",
+        # First Lexical editor in the dialog (post text, above photo preview)
+        "(//div[@role='dialog']//div[@data-lexical-editor='true'])[1]",
+        # Generic textbox fallback
+        "(//div[@role='dialog']//div[@role='textbox' and @contenteditable='true'])[1]",
+        # notranslate class (older Facebook layout)
+        "(//div[@role='dialog']//div[@contenteditable='true']"
+        "    [contains(@class,'notranslate')])[1]",
     ]
 
     text_added = False
@@ -488,40 +564,47 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 EC.presence_of_element_located((By.XPATH, xp))
             )
 
-            is_comment = driver.execute_script(
+            # Extra guard: skip if this is inside a caption/comment container
+            is_caption_or_comment = driver.execute_script(
                 """
                 var el = arguments[0];
                 while (el) {
                     var lbl = (el.getAttribute('aria-label') || '').toLowerCase();
-                    if (lbl.includes('comment') || lbl.includes('reply')) return true;
+                    if (lbl.includes('caption') || lbl.includes('comment')
+                            || lbl.includes('reply')) return true;
                     el = el.parentElement;
                 }
                 return false;
                 """,
                 tb,
             )
-            if is_comment:
-                log("  [skip] Matched a comment box, skipping XPath.")
+            if is_caption_or_comment:
+                log("  [skip] Matched a caption/comment box — trying next XPath.")
                 continue
 
             inject_text(driver, tb, text)
-            actual = driver.execute_script("return arguments[0].textContent;", tb)
+
+            actual = driver.execute_script(
+                "return arguments[0].textContent;", tb
+            )
             if actual and len(actual.strip()) > 5:
-                log(f"  [ok] Description inserted ({len(text)} chars).")
+                log(f"  [ok] Description inserted ({len(text)} chars). "
+                    f"Verified: '{actual[:40]}...'")
                 text_added = True
                 break
             else:
-                log("  [warn] Text box empty after inject — trying next XPath.")
+                log("  [warn] Text box still empty after inject — trying next XPath.")
+                sc(driver, "text_inject_empty")
         except (TimeoutException, NoSuchElementException):
             continue
 
     if not text_added:
-        log("  [WARN] Could not confirm text — continuing to submit.")
+        log("  [WARN] Could not verify text was inserted. Proceeding anyway.")
+        sc(driver, "text_not_verified")
 
-    # sc(driver, "text_added")
     time.sleep(random.uniform(1.0, 2.0))
 
-    # ── Step 4 · Submit (Post button inside dialog) ───────────────────
+    # ── Step 4: Submit ────────────────────────────────────────────────
     log("  [4/4] Submitting post...")
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
@@ -530,54 +613,51 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         "//div[@role='dialog']//button[.//span[normalize-space()='Post']]",
         "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
     ]
-    
+
     post_btn = None
     for xp in post_btn_xpaths:
         try:
-            post_btn = WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            post_btn = WebDriverWait(driver, 20).until(
+                EC.element_to_be_clickable((By.XPATH, xp))
+            )
             log("  [ok] Post button found and enabled.")
             break
         except TimeoutException:
             continue
-            
+
     if not post_btn:
-        sc(driver, "post_btn_fail")
         log("  [FAIL] Could not find an enabled Post button.")
+        sc(driver, "post_btn_fail")
         return False
 
     sc(driver, "pre_submit")
-    
-    # Force click via JS to bypass any invisible overlays
     driver.execute_script("arguments[0].click();", post_btn)
     log("  [ok] Post button clicked. Waiting for dialog to close (up to 90s)...")
 
-    # ── Wait for the dialog to disappear ──────────────────────────────
     try:
         WebDriverWait(driver, 90).until(
-            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+            EC.invisibility_of_element_located((By.XPATH, "//*[text()='Posting']"))
         )
-        log("  [ok] Dialog closed. Post submitted successfully.")
+        log("  [ok] Dialog closed — post submitted successfully.")
         sc(driver, "post_submitted")
         return True
-        
+
     except TimeoutException:
-        log("  [WARN] Dialog stuck open for 90s. Forcing page refresh to break lock...")
+        log("  [WARN] Dialog stuck open for 90s — forcing page refresh...")
         sc(driver, "post_dialog_stuck")
-        
-        # Force a refresh. If the post went through, the feed will reload with it.
         driver.refresh()
         time.sleep(4)
-        
-        # Check if the post actually made it to the feed despite the stuck dialog
+
         try:
-            body_text = driver.execute_script("return document.body.innerText.toLowerCase();")
+            body_text = driver.execute_script(
+                "return document.body.innerText.toLowerCase();"
+            )
             probe = " ".join(text.split())[:60].lower()
-            
             if probe in body_text:
                 log("  [ok] Post verified in feed after forced refresh!")
                 return True
             else:
-                log("  [FAIL] Post NOT in feed after refresh. It likely failed.")
+                log("  [FAIL] Post NOT in feed after refresh.")
                 return False
         except Exception:
             log("  [FAIL] Could not verify post after refresh.")
@@ -588,123 +668,70 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────
 def main() -> int:
-    log("=" * 60)
-    log("Facebook Group Poster Bot — starting (URL-based)")
-    log(f"  poster-{photo_number:02d}  |  description-{description_number:02d}")
-    log("=" * 60)
-
     state = load_daily_state()
-
-    target_group = pick_target_group(state)
-    if target_group is None:
-        log("No eligible groups remain for today.")
-        write_github_output(
-            status="no_groups_left",
-            group="none",
-            poster_number=photo_number,
-            published_time="N/A",
-            total_posts_today=state.get("total_posts", 0),
-        )
-        return 0
-
-    state["used_groups"] = state.get("used_groups", []) + [target_group]
-    save_daily_state(state)
-    log(f"'{extract_group_id(target_group)}' marked as used today "
-        f"({len(state['used_groups'])} total used).")
-
-    if not os.path.isfile(POSTER_PATH):
-        log(f"Poster image missing: {POSTER_PATH}")
-        write_github_output(
-            status="missing_poster",
-            group=target_group,
-            poster_number=photo_number,
-            published_time="N/A",
-            total_posts_today=state.get("total_posts", 0),
-        )
-        return 1
-
-    log("Launching Chrome (headless, undetected)...")
     driver = build_driver()
     driver.set_page_load_timeout(30)
-    succeeded      = False
+    succeeded = False
     published_at = ""
+    target_group = None
 
     try:
         driver.get("https://www.facebook.com")
         time.sleep(2)
         if "login" in driver.current_url.lower():
-            log("Facebook session expired — re-run facebook_profile_initializer.py.")
+            log("Facebook session expired.")
             sys.exit(99)
-        # sc(driver, "session_verified")
-        log("Session active.")
 
-        group_url = navigate_to_group(driver, target_group)
-        if not group_url:
-            write_github_output(
-                status="group_not_found",
-                group=target_group,
-                poster_number=photo_number,
-                published_time="N/A",
-                total_posts_today=state.get("total_posts", 0),
-            )
-            return 1
+        # ── Keep trying groups until one succeeds or none remain ──────
+        while True:
+            target_group = pick_target_group(state)
+            if target_group is None:
+                log("No eligible groups remain for today.")
+                break
 
-        # sc(driver, "group_page")
-
-        if is_buy_sell_on_page(driver):
-            log(f"'{extract_group_id(target_group)}' is a Buy & Sell group — skipping.")
-            # sc(driver, "buy_sell_detected")
-            write_github_output(
-                status="buy_sell_skipped",
-                group=target_group,
-                poster_number=photo_number,
-                published_time="N/A",
-                total_posts_today=state.get("total_posts", 0),
-            )
-            return 0
-
-        if is_admin_only_on_page(driver):
-            log(f"'{extract_group_id(target_group)}' only allows admin posts — skipping.")
-            # sc(driver, "admin_only_detected")
-            write_github_output(
-                status="admin_only_skipped",
-                group=target_group,
-                poster_number=photo_number,
-                published_time="N/A",
-                total_posts_today=state.get("total_posts", 0),
-            )
-            return 0
-
-        if not can_post(driver):
-            log(f"Not a member of '{extract_group_id(target_group)}' — skipping.")
-            write_github_output(
-                status="not_a_member",
-                group=target_group,
-                poster_number=photo_number,
-                published_time="N/A",
-                total_posts_today=state.get("total_posts", 0),
-            )
-            return 0
-
-        log(f"Posting to: {extract_group_id(target_group)}")
-        succeeded = post_to_current_group(driver, POSTER_PATH, POST_DESCRIPTION)
-
-        if succeeded:
-            published_at         = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
-            state["total_posts"] = state.get("total_posts", 0) + 1
+            # Mark used BEFORE navigating (prevents re-pick on exception)
+            state["used_groups"] = state.get("used_groups", []) + [target_group]
             save_daily_state(state)
-            log(f"SUCCESS — poster-{photo_number:02d} posted at {published_at}. "
-                f"Total today: {state['total_posts']}")
+
+            if not os.path.isfile(POSTER_PATH):
+                log(f"Poster image missing: {POSTER_PATH}")
+                break
+
+            group_url = navigate_to_group(driver, target_group)
+            if not group_url:
+                log("Navigation failed — trying next group.")
+                continue   # ← skips to next instead of exiting
+
+            if is_buy_sell_on_page(driver):
+                log(f"'{extract_group_id(target_group)}' is Buy & Sell — skipping.")
+                continue   # ← skips to next
+
+            if is_admin_only_on_page(driver):
+                log(f"'{extract_group_id(target_group)}' is admin-only — skipping.")
+                continue   # ← skips to next
+
+            if not can_post(driver):
+                log(f"Not a member of '{extract_group_id(target_group)}' — skipping.")
+                continue   # ← skips to next
+
+            # ── All checks passed — attempt the post ──────────────────
+            log(f"Posting to: {extract_group_id(target_group)}")
+            succeeded = post_to_current_group(driver, POSTER_PATH, POST_DESCRIPTION)
+
+            if succeeded:
+                published_at = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M")
+                state["total_posts"] = state.get("total_posts", 0) + 1
+                save_daily_state(state)
+                log(f"SUCCESS — poster-{photo_number:02d} posted at {published_at}. "
+                    f"Total today: {state['total_posts']}")
+            break   # ← stop after one successful (or attempted) post
 
     except SystemExit:
         raise
     except Exception as exc:
         log(f"Unhandled error: {exc}")
-        # sc(driver, "unhandled_error")
-
     finally:
         if succeeded:
-            log("Holding browser open for 5s to safely finish network requests...")
             time.sleep(5)
         try:
             driver.quit()
@@ -713,15 +740,14 @@ def main() -> int:
 
     status_label = "published" if succeeded else "FAILED"
     write_github_output(
-        group=target_group,
+        group=target_group or "none",
         poster_number=photo_number,
         published_time=published_at or "N/A",
         status=status_label,
         total_posts_today=state.get("total_posts", 0),
     )
-    log("=" * 60)
     log(f"Run finished — {status_label}")
-    log("=" * 60)
+
     return 0 if succeeded else 1
 
 
