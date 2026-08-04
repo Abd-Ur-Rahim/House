@@ -352,36 +352,137 @@ def can_post(driver) -> bool:
 # ─────────────────────────────────────────────────────────────────────
 # Text injection (React / Lexical compatible)
 # ─────────────────────────────────────────────────────────────────────
+def has_unicode(text: str) -> bool:
+    """Returns True if text contains any non-ASCII characters."""
+    return any(ord(c) > 127 for c in text)
+
+
 def inject_text(driver, element, text: str) -> None:
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+    """
+    Insert text into a contenteditable / Lexical editor.
+    Uses CDP Input.insertText for Unicode (Sinhala, Tamil, etc.)
+    and chunked ActionChains for plain ASCII.
+    """
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center'});", element
+    )
     time.sleep(0.3)
 
+    # Focus the element
     try:
         element.click()
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", element)
-    time.sleep(0.4)
+    time.sleep(0.5)
 
-    # Select all + delete works on contenteditable (unlike .clear())
+    # Clear existing content — Ctrl+A + Delete works on contenteditable
     ActionChains(driver)\
         .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
         .perform()
     time.sleep(0.2)
     ActionChains(driver).send_keys(Keys.DELETE).perform()
-    time.sleep(0.2)
+    time.sleep(0.3)
 
-    # Send in chunks to avoid dropped characters on long strings
-    chunk_size = 200
-    for i in range(0, len(text), chunk_size):
-        ActionChains(driver).send_keys(text[i:i + chunk_size]).perform()
-        time.sleep(0.15)
+    if has_unicode(text):
+        # ── Unicode path (Sinhala / Tamil / any non-ASCII) ───────────
+        # CDP Input.insertText bypasses keyboard translation entirely.
+        # Works for any character that exists in Unicode regardless of
+        # whether a physical keyboard key exists for it.
+        log("  [unicode] Non-ASCII text detected — using CDP insertText.")
+        _inject_via_cdp(driver, element, text)
+    else:
+        # ── ASCII path — chunked ActionChains ────────────────────────
+        chunk_size = 200
+        for i in range(0, len(text), chunk_size):
+            ActionChains(driver).send_keys(text[i:i + chunk_size]).perform()
+            time.sleep(0.15)
 
     time.sleep(0.5)
 
-    # Fallback: execCommand if ActionChains produced nothing
-    current = driver.execute_script("return arguments[0].textContent;", element)
+    # Verify insertion succeeded
+    current = driver.execute_script(
+        "return arguments[0].textContent;", element
+    )
     if not current or len(current.strip()) < 5:
-        log("  [fallback] ActionChains failed — using execCommand.")
+        log("  [fallback] Primary inject failed — using clipboard simulation.")
+        _inject_via_clipboard(driver, element, text)
+        time.sleep(0.5)
+
+
+def _inject_via_cdp(driver, element, text: str) -> None:
+    """
+    Primary Unicode injection using Chrome DevTools Protocol.
+    Input.insertText inserts directly into the focused element —
+    no keyboard event translation, works for any script.
+    """
+    # Ensure focus is on the element before CDP call
+    driver.execute_script("arguments[0].focus();", element)
+    time.sleep(0.3)
+
+    try:
+        # Split into smaller chunks — CDP has a character limit per call
+        # and combining characters must stay together within a chunk.
+        # Split on grapheme boundaries (newlines / spaces) not byte offsets.
+        chunks = _safe_unicode_chunks(text, max_chars=100)
+        for chunk in chunks:
+            driver.execute_cdp_cmd('Input.insertText', {'text': chunk})
+            time.sleep(0.1)
+        log(f"  [cdp] Inserted {len(text)} chars via CDP in {len(chunks)} chunk(s).")
+    except Exception as e:
+        log(f"  [cdp] CDP insertText failed: {e} — trying clipboard fallback.")
+        _inject_via_clipboard(driver, element, text)
+
+
+def _inject_via_clipboard(driver, element, text: str) -> None:
+    """
+    Secondary Unicode injection using a synthetic paste event.
+    Simulates Ctrl+V clipboard paste which Lexical handles natively
+    and correctly processes any Unicode including combining characters.
+    """
+    driver.execute_script("arguments[0].focus();", element)
+    time.sleep(0.2)
+
+    # Dispatch a ClipboardEvent with the text as clipboard data.
+    # Lexical's paste handler processes this correctly for all scripts.
+    pasted = driver.execute_script(
+        """
+        var el   = arguments[0];
+        var text = arguments[1];
+        try {
+            var dt = new DataTransfer();
+            dt.setData('text/plain', text);
+
+            // Try paste event first (Lexical handles this natively)
+            var pasteEvt = new ClipboardEvent('paste', {
+                clipboardData : dt,
+                bubbles       : true,
+                cancelable    : true
+            });
+            el.dispatchEvent(pasteEvt);
+
+            if (el.textContent && el.textContent.length > 0) {
+                return true;
+            }
+
+            // Fallback: beforeinput with insertFromPaste type
+            var inputEvt = new InputEvent('beforeinput', {
+                inputType    : 'insertFromPaste',
+                data         : text,
+                dataTransfer : dt,
+                bubbles      : true,
+                cancelable   : true
+            });
+            el.dispatchEvent(inputEvt);
+            return el.textContent.length > 0;
+        } catch(e) {
+            return false;
+        }
+        """,
+        element, text
+    )
+
+    if not pasted:
+        # Last resort: execCommand (deprecated but still works in Chrome 2024+)
         driver.execute_script(
             "arguments[0].focus();"
             "document.execCommand('selectAll', false, null);"
@@ -389,7 +490,38 @@ def inject_text(driver, element, text: str) -> None:
             "document.execCommand('insertText', false, arguments[1]);",
             element, text,
         )
-        time.sleep(0.5)
+        log("  [clipboard] Used execCommand as final fallback.")
+    else:
+        log(f"  [clipboard] Inserted {len(text)} chars via clipboard simulation.")
+
+
+def _safe_unicode_chunks(text: str, max_chars: int = 100) -> list:
+    """
+    Split text into chunks without breaking Unicode grapheme clusters.
+    Splits preferably at newline or space boundaries to keep
+    combining character sequences (consonant + vowel sign) intact.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    while text:
+        if len(text) <= max_chars:
+            chunks.append(text)
+            break
+
+        # Try to split at a newline or space within the limit
+        split_at = max_chars
+        for sep in ('\n', ' '):
+            pos = text.rfind(sep, 0, max_chars)
+            if pos > max_chars // 2:   # only split here if not too early
+                split_at = pos + 1
+                break
+
+        chunks.append(text[:split_at])
+        text = text[split_at:]
+
+    return chunks
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -682,6 +814,13 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     # ── Step 3: Insert description ────────────────────────────────────
     log("  [3/4] Inserting description into post editor...")
+
+    # Through proxy, Lexical editor initializes 2-5s after the DOM appears.
+    # Wait until the editor reports itself as ready before injecting text.
+    proxy_mode = is_proxy_active()
+    lexical_wait = 5 if proxy_mode else 2
+    log(f"  Waiting {lexical_wait}s for Lexical editor to initialize...")
+    time.sleep(lexical_wait)
     editor_xpaths = [
         # Most specific — post-level Lexical editor (skip caption boxes)
         "//div[@role='dialog']//div[@data-lexical-editor='true']"
