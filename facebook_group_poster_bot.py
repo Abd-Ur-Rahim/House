@@ -187,7 +187,7 @@ def build_driver() -> Driver:
     return Driver(
         browser="chrome",
         uc=True,
-        headless=False,
+        headless=True,
         user_data_dir=profile_path,
         # proxy=proxy,
     )
