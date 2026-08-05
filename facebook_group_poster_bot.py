@@ -375,23 +375,46 @@ def inject_text(driver, element, text: str) -> None:
         driver.execute_script("arguments[0].click();", element)
     time.sleep(0.5)
 
-    # Clear existing content — Ctrl+A + Delete works on contenteditable
-    ActionChains(driver)\
-        .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
-        .perform()
-    time.sleep(0.2)
-    ActionChains(driver).send_keys(Keys.DELETE).perform()
+    use_unicode_path = has_unicode(text)
+
+    # ── Clear existing content ──────────────────────────────────────
+    # ActionChains Ctrl+A fails over proxy latency for non-ASCII editors
+    # and on headless Linux where the keyboard layout may not match.
+    # Use JS selectAll + delete for Unicode, ActionChains for ASCII.
+    if use_unicode_path:
+        log("  [unicode] Clearing via JS (skipping ActionChains Ctrl+A).")
+        driver.execute_script(
+            "arguments[0].focus();"
+            "document.execCommand('selectAll', false, null);"
+            "document.execCommand('delete', false, null);",
+            element,
+        )
+    else:
+        ActionChains(driver)\
+            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
+            .perform()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(Keys.DELETE).perform()
     time.sleep(0.3)
 
-    if has_unicode(text):
-        # ── Unicode path (Sinhala / Tamil / any non-ASCII) ───────────
-        # CDP Input.insertText bypasses keyboard translation entirely.
-        # Works for any character that exists in Unicode regardless of
-        # whether a physical keyboard key exists for it.
-        log("  [unicode] Non-ASCII text detected — using CDP insertText.")
-        _inject_via_cdp(driver, element, text)
+    # ── Insert text ─────────────────────────────────────────────────
+    if use_unicode_path:
+        # Try CDP first (bypasses keyboard translation entirely)
+        log("  [unicode] Non-ASCII text detected — trying CDP insertText.")
+        cdp_ok = _inject_via_cdp(driver, element, text)
+
+        if not cdp_ok:
+            # CDP failed (common with SeleniumBase UC mode which
+            # patches the DevTools pipe). Use JS execCommand fallback.
+            log("  [unicode] CDP unavailable — using JS execCommand insertText.")
+            driver.execute_script("arguments[0].focus();", element)
+            time.sleep(0.2)
+            driver.execute_script(
+                "document.execCommand('insertText', false, arguments[0]);",
+                text,
+            )
     else:
-        # ── ASCII path — chunked ActionChains ────────────────────────
+        # ASCII path — chunked ActionChains
         chunk_size = 200
         for i in range(0, len(text), chunk_size):
             ActionChains(driver).send_keys(text[i:i + chunk_size]).perform()
@@ -409,28 +432,28 @@ def inject_text(driver, element, text: str) -> None:
         time.sleep(0.5)
 
 
-def _inject_via_cdp(driver, element, text: str) -> None:
+def _inject_via_cdp(driver, element, text: str) -> bool:
     """
     Primary Unicode injection using Chrome DevTools Protocol.
     Input.insertText inserts directly into the focused element —
     no keyboard event translation, works for any script.
+
+    Returns True on success, False if CDP is unavailable (common with
+    SeleniumBase UC mode which patches the DevTools pipe).
     """
-    # Ensure focus is on the element before CDP call
     driver.execute_script("arguments[0].focus();", element)
     time.sleep(0.3)
 
     try:
-        # Split into smaller chunks — CDP has a character limit per call
-        # and combining characters must stay together within a chunk.
-        # Split on grapheme boundaries (newlines / spaces) not byte offsets.
         chunks = _safe_unicode_chunks(text, max_chars=100)
         for chunk in chunks:
             driver.execute_cdp_cmd('Input.insertText', {'text': chunk})
             time.sleep(0.1)
         log(f"  [cdp] Inserted {len(text)} chars via CDP in {len(chunks)} chunk(s).")
+        return True
     except Exception as e:
-        log(f"  [cdp] CDP insertText failed: {e} — trying clipboard fallback.")
-        _inject_via_clipboard(driver, element, text)
+        log(f"  [cdp] CDP insertText failed: {e}")
+        return False
 
 
 def _inject_via_clipboard(driver, element, text: str) -> None:
