@@ -3,6 +3,21 @@
 Facebook Group Poster Bot  (URL-based edition)
 ==============================================
 Posts a random poster + description directly into ONE Facebook group per run.
+<<<<<<< HEAD
+=======
+
+PROXY-STALL FIX (this revision):
+  * Image is aggressively compressed/downscaled in proxy mode BEFORE upload.
+  * Post button must be STABLY enabled (no flicker) before it is clicked —
+    clicking while the server upload is still in flight is what caused the
+    infinite 'Posting' overlay.
+  * Upload spinner wait re-enabled with a stable-clear requirement.
+  * Real extended timeouts in proxy mode (300s upload / 300s submit).
+  * wait_for_dialog_close_or_timeout() rewritten as a polling loop with
+    progress logging (no single blind blocking wait).
+  * NEW Recovery 0: long grace period BEFORE refreshing — a refresh kills
+    an in-flight upload, so we give the proxy time to finish first.
+>>>>>>> 367dcec (improved for posting fix)
 """
 
 import json
@@ -379,9 +394,13 @@ def inject_text(driver, element, text: str) -> None:
         driver.execute_script("arguments[0].click();", element)
     time.sleep(0.5)
 
+<<<<<<< HEAD
     # ── FIX 1 & 4: Try CDP first for ALL text (unicode AND ascii) ────────
     # CDP Input.insertText inserts the exact string at the protocol level —
     # no keyboard translation, no newline→Enter conversion, works for any script.
+=======
+    # ── Try CDP first for ALL text (unicode AND ascii) ────────────────
+>>>>>>> 367dcec (improved for posting fix)
     log("  Trying CDP injection first (works for all text types)...")
     if _inject_via_cdp(driver, element, text):
         cdp_result = driver.execute_script("return arguments[0].innerText;", element)
@@ -396,7 +415,11 @@ def inject_text(driver, element, text: str) -> None:
 
     time.sleep(0.5)
 
+<<<<<<< HEAD
     # ── FIX 2: Tighter verification — check both length AND newline count ─
+=======
+    # ── Tighter verification — check both length AND newline count ─────
+>>>>>>> 367dcec (improved for posting fix)
     current = driver.execute_script("return arguments[0].innerText;", element)
     if current:
         inserted_len      = len(current.strip())
@@ -474,7 +497,10 @@ def _inject_via_clipboard(driver, element, text: str) -> None:
     time.sleep(0.2)
 
     # ── Method 1: beforeinput insertFromPaste (Lexical native handler) ──
+<<<<<<< HEAD
     # FIX 1: Use innerText (not textContent) so newlines are counted correctly.
+=======
+>>>>>>> 367dcec (improved for posting fix)
     injected = driver.execute_script(
         """
         var el   = arguments[0];
@@ -495,7 +521,10 @@ def _inject_via_clipboard(driver, element, text: str) -> None:
 
             return new Promise(function(resolve) {
                 setTimeout(function() {
+<<<<<<< HEAD
                     // FIX: use innerText so line breaks count toward length
+=======
+>>>>>>> 367dcec (improved for posting fix)
                     var content = el.innerText || '';
                     resolve(content.trim().length > 5);
                 }, 400);
@@ -521,7 +550,10 @@ def _inject_via_clipboard(driver, element, text: str) -> None:
     )
     time.sleep(0.2)
 
+<<<<<<< HEAD
     # FIX 1: Use innerText (not textContent) for newline-aware verification.
+=======
+>>>>>>> 367dcec (improved for posting fix)
     injected = driver.execute_script(
         """
         var el   = arguments[0];
@@ -537,7 +569,10 @@ def _inject_via_clipboard(driver, element, text: str) -> None:
         document.execCommand('paste');
         return new Promise(function(resolve) {
             setTimeout(function() {
+<<<<<<< HEAD
                 // FIX: use innerText so line breaks count toward length
+=======
+>>>>>>> 367dcec (improved for posting fix)
                 var content = el.innerText || '';
                 resolve(content.trim().length > 5);
             }, 400);
@@ -610,10 +645,19 @@ def _safe_unicode_chunks(text: str, max_chars: int = 3500) -> list:
 # ─────────────────────────────────────────────────────────────────────
 # Proxy-aware image compression
 # ─────────────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 def compress_image_for_proxy(path: str, max_size_kb: int = 300) -> str:
     """
     Compress a large image to a JPEG for faster upload through proxy.
     Returns the path to the compressed file (original unchanged).
+=======
+def compress_image_for_proxy(path: str, max_size_kb: int = 200) -> str:
+    """
+    PROXY FIX: Aggressively compress + DOWNSCALE a large image so the
+    upload through a slow SOCKS5/VLESS proxy finishes quickly.
+    A 3 MB PNG that takes minutes becomes a ~150-200 KB JPEG that
+    uploads in seconds. Returns path to compressed file (original unchanged).
+>>>>>>> 367dcec (improved for posting fix)
     """
     try:
         from PIL import Image
@@ -621,12 +665,27 @@ def compress_image_for_proxy(path: str, max_size_kb: int = 300) -> str:
         if orig.mode in ("RGBA", "P"):
             orig = orig.convert("RGB")
 
+<<<<<<< HEAD
         # Progressive downscale — target ~300 KB JPEG
+=======
+        # PROXY FIX: downscale — FB displays feed images at ~1080px anyway.
+        MAX_DIM = 1440
+        if max(orig.size) > MAX_DIM:
+            ratio = MAX_DIM / max(orig.size)
+            new_size = (int(orig.width * ratio), int(orig.height * ratio))
+            orig = orig.resize(new_size, Image.LANCZOS)
+            log(f"  [compress] Downscaled to {new_size[0]}x{new_size[1]}.")
+
+>>>>>>> 367dcec (improved for posting fix)
         out_dir = os.path.join(os.path.dirname(path), "compressed")
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, "compressed_poster.jpg")
 
+<<<<<<< HEAD
         for quality in (65, 50, 35):
+=======
+        for quality in (70, 60, 50, 40, 30):
+>>>>>>> 367dcec (improved for posting fix)
             orig.save(out_path, "JPEG", quality=quality, optimize=True)
             if os.path.getsize(out_path) <= max_size_kb * 1024:
                 break
@@ -643,13 +702,31 @@ def compress_image_for_proxy(path: str, max_size_kb: int = 300) -> str:
 # ─────────────────────────────────────────────────────────────────────
 # Proxy-aware upload / submit helpers
 # ─────────────────────────────────────────────────────────────────────
+<<<<<<< HEAD
 def wait_for_post_button_enabled(driver, timeout: int = 90) -> bool:
+=======
+def wait_for_post_button_enabled(driver, timeout: int = 90,
+                                 stable_for: int = 0) -> bool:
+>>>>>>> 367dcec (improved for posting fix)
     """
     Poll until the Post button's aria-disabled attribute is gone.
     Facebook sets aria-disabled='true' while the photo is uploading
     to its servers — EC.element_to_be_clickable does NOT catch this.
+<<<<<<< HEAD
     """
     log("  Waiting for Post button to become enabled (server upload)...")
+=======
+
+    PROXY FIX (stable_for): through a slow proxy the button briefly
+    flickers to enabled BEFORE the server upload finishes, then goes
+    disabled again. Clicking during that flicker is what caused the
+    infinite 'Posting' overlay. When stable_for > 0, the button must
+    remain continuously enabled for that many seconds before we
+    trust it.
+    """
+    log(f"  Waiting for Post button to become enabled "
+        f"(server upload, stable_for={stable_for}s)...")
+>>>>>>> 367dcec (improved for posting fix)
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
         "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Post']]",
@@ -658,14 +735,19 @@ def wait_for_post_button_enabled(driver, timeout: int = 90) -> bool:
         "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Publish']]",
     ]
 
+<<<<<<< HEAD
     deadline = time.time() + timeout
     while time.time() < deadline:
+=======
+    def _is_enabled_now() -> bool:
+>>>>>>> 367dcec (improved for posting fix)
         for xp in post_btn_xpaths:
             for btn in driver.find_elements(By.XPATH, xp):
                 try:
                     if (btn.get_attribute("aria-disabled") != "true"
                             and btn.get_attribute("disabled") is None
                             and btn.is_displayed()):
+<<<<<<< HEAD
                         log("  [ok] Post button is enabled — upload complete.")
                         return True
                 except StaleElementReferenceException:
@@ -678,11 +760,52 @@ def wait_for_post_button_enabled(driver, timeout: int = 90) -> bool:
 
 def wait_for_upload_spinner_gone(driver, timeout: int = 120) -> None:
     """Wait for Facebook's upload progress spinners to disappear."""
+=======
+                        return True
+                except StaleElementReferenceException:
+                    continue
+        return False
+
+    deadline      = time.time() + timeout
+    enabled_since = None
+    while time.time() < deadline:
+        if _is_enabled_now():
+            if stable_for <= 0:
+                log("  [ok] Post button is enabled — upload complete.")
+                return True
+            if enabled_since is None:
+                enabled_since = time.time()
+                log("  Post button enabled — verifying it stays enabled...")
+            elif time.time() - enabled_since >= stable_for:
+                log(f"  [ok] Post button stably enabled for {stable_for}s "
+                    f"— upload complete.")
+                return True
+        else:
+            if enabled_since is not None:
+                log("  [proxy] Post button flickered back to DISABLED — "
+                    "upload still in progress. Resetting stability timer.")
+            enabled_since = None
+        time.sleep(1.5)
+
+    log("  [FAIL] Post button never became (stably) enabled within timeout.")
+    return False
+
+
+def wait_for_upload_spinner_gone(driver, timeout: int = 120,
+                                 stable_for: int = 3) -> bool:
+    """
+    Wait for Facebook's upload progress spinners to disappear.
+    PROXY FIX: spinners must stay gone for `stable_for` consecutive
+    seconds (they briefly disappear between chunked-upload requests).
+    Returns True if spinners cleared, False on timeout.
+    """
+>>>>>>> 367dcec (improved for posting fix)
     spinner_xpaths = [
         "//div[@role='dialog']//div[@role='progressbar']",
         "//div[@role='dialog']//div[@data-visualcompletion='loading-state']",
         "//div[@role='dialog']//svg[contains(@class,'spinner')]",
     ]
+<<<<<<< HEAD
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not any(driver.find_elements(By.XPATH, xp) for xp in spinner_xpaths):
@@ -690,11 +813,53 @@ def wait_for_upload_spinner_gone(driver, timeout: int = 120) -> None:
             return
         time.sleep(1)
     log("  [WARN] Spinner still visible after timeout — continuing anyway.")
+=======
+    deadline   = time.time() + timeout
+    gone_since = None
+    while time.time() < deadline:
+        spinner_present = any(
+            driver.find_elements(By.XPATH, xp) for xp in spinner_xpaths
+        )
+        if not spinner_present:
+            if gone_since is None:
+                gone_since = time.time()
+            elif time.time() - gone_since >= stable_for:
+                log("  [ok] No upload spinners detected (stable).")
+                return True
+        else:
+            gone_since = None
+        time.sleep(1)
+    log("  [WARN] Spinner still visible after timeout — continuing anyway.")
+    return False
+
+
+def is_posting_overlay_visible(driver) -> bool:
+    """Check whether the 'Posting' status text is currently visible."""
+    try:
+        for el in driver.find_elements(By.XPATH, "//*[text()='Posting']"):
+            try:
+                if el.is_displayed():
+                    return True
+            except StaleElementReferenceException:
+                continue
+    except Exception:
+        pass
+    return False
+
+>>>>>>> 367dcec (improved for posting fix)
 
 def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool, float]":
     """
     Wait for the post dialog to close naturally after clicking Post.
     Returns (closed_naturally, elapsed_seconds).
+<<<<<<< HEAD
+=======
+
+    PROXY FIX: rewritten as a manual polling loop. Success = dialog gone
+    OR 'Posting' overlay cleared while dialog remains (FB sometimes keeps
+    a residual dialog node in the DOM). Progress is logged every 15s so
+    a slow proxy upload is visible instead of a silent blind wait.
+>>>>>>> 367dcec (improved for posting fix)
     """
     start = time.time()
 
@@ -705,6 +870,7 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
         return False, 0.0
 
     # 2. Minimum wait — Facebook needs time to process the click and start upload.
+<<<<<<< HEAD
     # Do NOT check for dialog close during this period.
     min_wait = 8 if is_proxy_active() else 4
     log(f"  Waiting {min_wait}s minimum for Facebook to process the post...")
@@ -713,10 +879,19 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
     # 3. Now check if dialog is still there
     dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
     if not dialogs:
+=======
+    min_wait = 10 if is_proxy_active() else 4
+    log(f"  Waiting {min_wait}s minimum for Facebook to process the post...")
+    time.sleep(min_wait)
+
+    # 3. Quick check — dialog may already be gone
+    if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+>>>>>>> 367dcec (improved for posting fix)
         elapsed = time.time() - start
         log(f"  [ok] Dialog gone after {elapsed:.1f}s minimum wait — post likely submitted.")
         return True, elapsed
 
+<<<<<<< HEAD
     # 4. STEP 1: Wait briefly for the 'Posting' text to APPEAR in the DOM.
     # If it loads incredibly fast and we miss it, we catch the TimeoutException and move on.
     try:
@@ -738,6 +913,48 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
     except TimeoutException:
         elapsed = time.time() - start
         return False, elapsed
+=======
+    # 4. Poll: dialog gone OR 'Posting' overlay cleared = success.
+    posting_seen  = False
+    last_progress = time.time()
+    deadline      = time.time() + timeout
+    while time.time() < deadline:
+        # a) dialog fully closed
+        if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+            elapsed = time.time() - start
+            log(f"  [ok] Dialog closed naturally after {elapsed:.1f}s — post submitted!")
+            return True, elapsed
+
+        # b) 'Posting' overlay tracking
+        posting_now = is_posting_overlay_visible(driver)
+        if posting_now and not posting_seen:
+            posting_seen = True
+            log("  [ok] 'Posting' status indicator detected on the page.")
+        elif posting_seen and not posting_now:
+            # Overlay appeared and has now cleared — give the dialog a
+            # moment to close, then treat as submitted either way.
+            time.sleep(3)
+            elapsed = time.time() - start
+            if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+                log(f"  [ok] 'Posting' cleared and dialog closed in {elapsed:.1f}s.")
+            else:
+                log(f"  [ok] 'Posting' cleared in {elapsed:.1f}s (residual dialog "
+                    f"node remains) — treating as submitted.")
+            return True, elapsed
+
+        # c) periodic progress log so proxy waits are visible
+        if time.time() - last_progress >= 15:
+            remaining = int(deadline - time.time())
+            log(f"  ...still waiting (posting_overlay="
+                f"{'visible' if posting_now else 'not visible'}, "
+                f"{remaining}s left).")
+            last_progress = time.time()
+
+        time.sleep(2)
+
+    elapsed = time.time() - start
+    return False, elapsed
+>>>>>>> 367dcec (improved for posting fix)
 
 
 def force_close_dialog(driver) -> bool:
@@ -809,6 +1026,7 @@ def verify_post_in_feed(driver, text: str, max_wait: int = 30) -> bool:
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     proxy_mode   = is_proxy_active()
+<<<<<<< HEAD
     # VLESS proxy adds 3-5x latency. 3 MB PNG upload can take 3-5 min.
     # Post button stays aria-disabled until Facebook confirms upload.
     upload_wait  = 120 if proxy_mode else 60   # 5 min for proxy upload
@@ -817,6 +1035,19 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     if proxy_mode:
         log("  [proxy] Proxy mode active — using extended timeouts.")
+=======
+    # PROXY FIX: real extended timeouts. VLESS proxy adds 3-5x latency —
+    # the upload of even a compressed image can take a couple of minutes.
+    upload_wait  = 300 if proxy_mode else 60    # wait for server upload
+    submit_wait  = 300 if proxy_mode else 90    # wait after clicking Post
+    extra_buffer = 6   if proxy_mode else 1
+    stable_need  = 8   if proxy_mode else 0     # button must stay enabled this long
+
+    if proxy_mode:
+        log("  [proxy] Proxy mode active — using extended timeouts "
+            f"(upload={upload_wait}s, submit={submit_wait}s, "
+            f"button-stability={stable_need}s).")
+>>>>>>> 367dcec (improved for posting fix)
 
     # ── Step 1: Open composer ─────────────────────────────────────────
     log("  [1/4] Opening post composer dialog...")
@@ -916,17 +1147,33 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     time.sleep(0.5)
 
     abs_path = os.path.abspath(image_path)
+<<<<<<< HEAD
     # Compress large images in proxy mode — 3 MB PNG takes minutes through VLESS
     if proxy_mode and os.path.getsize(abs_path) > 500_000:
         log("  [proxy] Compressing image for faster upload...")
         abs_path = compress_image_for_proxy(abs_path)
     file_input.send_keys(abs_path)
     log(f"  [ok] File sent silently: {os.path.basename(abs_path)}")
+=======
+    # PROXY FIX: ALWAYS compress in proxy mode (threshold dropped from
+    # 500 KB to 150 KB) — large uploads through VLESS are what stall the
+    # post at the infinite 'Posting' overlay.
+    if proxy_mode and os.path.getsize(abs_path) > 150_000:
+        log("  [proxy] Compressing image for faster upload...")
+        abs_path = compress_image_for_proxy(abs_path)
+    file_input.send_keys(abs_path)
+    log(f"  [ok] File sent silently: {os.path.basename(abs_path)} "
+        f"({os.path.getsize(abs_path)/1024:.0f} KB)")
+>>>>>>> 367dcec (improved for posting fix)
 
     # Wait for browser-side preview (confirms file was accepted locally)
     log("  Waiting for photo preview...")
     try:
+<<<<<<< HEAD
         WebDriverWait(driver, 30).until(
+=======
+        WebDriverWait(driver, 60 if proxy_mode else 30).until(
+>>>>>>> 367dcec (improved for posting fix)
             EC.presence_of_element_located((
                 By.XPATH,
                 "//div[@role='dialog']//img[contains(@src,'blob:')"
@@ -936,6 +1183,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         )
         log("  [ok] Photo preview visible.")
     except TimeoutException:
+<<<<<<< HEAD
         log("  [WARN] Preview not seen in 30s — continuing.")
         sc(driver, "photo_preview_timeout")
 
@@ -947,6 +1195,25 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     # check it manually. Facebook keeps the button disabled until the
     # server confirms the photo upload, which is slow through a proxy.
     if not wait_for_post_button_enabled(driver, timeout=upload_wait):
+=======
+        log("  [WARN] Preview not seen — continuing.")
+        sc(driver, "photo_preview_timeout")
+
+    # PROXY FIX: re-enabled — wait for upload spinners to clear
+    # (server-side upload finished) BEFORE trusting the Post button.
+    wait_for_upload_spinner_gone(
+        driver,
+        timeout=240 if proxy_mode else 60,
+        stable_for=5 if proxy_mode else 2,
+    )
+
+    # ── KEY FIX: Poll aria-disabled until Post button is STABLY enabled ─
+    # EC.element_to_be_clickable ignores aria-disabled='true' — we must
+    # check it manually. Through a proxy the button also flickers enabled
+    # BEFORE the upload completes, so require stability (stable_need).
+    if not wait_for_post_button_enabled(driver, timeout=upload_wait,
+                                        stable_for=stable_need):
+>>>>>>> 367dcec (improved for posting fix)
         log("  [FAIL] Post button never became enabled — upload may have failed.")
         sc(driver, "post_btn_disabled_timeout")
         return False
@@ -958,8 +1225,11 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     log("  [3/4] Inserting description into post editor...")
 
     # Through proxy, Lexical editor initializes 2-5s after the DOM appears.
+<<<<<<< HEAD
     # Wait until the editor reports itself as ready before injecting text.
     proxy_mode = is_proxy_active()
+=======
+>>>>>>> 367dcec (improved for posting fix)
     lexical_wait = 5 if proxy_mode else 2
     log(f"  Waiting {lexical_wait}s for Lexical editor to initialize...")
     time.sleep(lexical_wait)
@@ -1020,12 +1290,29 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     # ── Step 4: Submit ────────────────────────────────────────────────
     log("  [4/4] Submitting post...")
 
+<<<<<<< HEAD
     # Through proxy, button can flicker disabled briefly after text inject.
     # Don't hard-fail — just wait and retry.
     if not wait_for_post_button_enabled(driver, timeout=60):
         log("  [WARN] Post button still disabled — waiting extra 30s...")
         time.sleep(30)
         if not wait_for_post_button_enabled(driver, timeout=30):
+=======
+    # PROXY FIX: before clicking, require the button to be STABLY enabled
+    # again — text injection can restart background upload work, and any
+    # spinner must be gone. Clicking too early = infinite 'Posting'.
+    wait_for_upload_spinner_gone(
+        driver,
+        timeout=120 if proxy_mode else 30,
+        stable_for=5 if proxy_mode else 2,
+    )
+    if not wait_for_post_button_enabled(driver, timeout=120,
+                                        stable_for=stable_need):
+        log("  [WARN] Post button still disabled — waiting extra 30s...")
+        time.sleep(30)
+        if not wait_for_post_button_enabled(driver, timeout=60,
+                                            stable_for=stable_need):
+>>>>>>> 367dcec (improved for posting fix)
             log("  [FAIL] Post button disabled again before click.")
             sc(driver, "post_btn_redisabled")
             return False
@@ -1077,10 +1364,38 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     log(f"  [WARN] Dialog open after {elapsed:.1f}s. Checking if post went through...")
     sc(driver, "dialog_stuck_proxy")
 
+<<<<<<< HEAD
     # Recovery 1: Refresh and check feed
     driver.refresh()
     time.sleep(5 if proxy_mode else 3)
     if verify_post_in_feed(driver, text, max_wait=20):
+=======
+    # PROXY FIX — Recovery 0: DO NOT refresh yet. A refresh aborts an
+    # in-flight upload. Give the proxy a long grace period first, and
+    # succeed the moment the dialog closes or 'Posting' clears.
+    if proxy_mode:
+        log("  [proxy] Recovery 0: grace period — waiting up to 120s more "
+            "before refreshing (refresh would abort an in-flight upload)...")
+        grace_deadline = time.time() + 120
+        while time.time() < grace_deadline:
+            if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+                log("  [ok] Dialog closed during grace period — post submitted!")
+                sc(driver, "post_submitted_grace")
+                return True
+            if not is_posting_overlay_visible(driver):
+                time.sleep(5)
+                if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+                    log("  [ok] 'Posting' cleared and dialog closed in grace period!")
+                    sc(driver, "post_submitted_grace")
+                    return True
+            time.sleep(5)
+        log("  [proxy] Grace period expired — proceeding to refresh recovery.")
+
+    # Recovery 1: Refresh and check feed
+    driver.refresh()
+    time.sleep(8 if proxy_mode else 3)
+    if verify_post_in_feed(driver, text, max_wait=40 if proxy_mode else 20):
+>>>>>>> 367dcec (improved for posting fix)
         log("  [ok] Post CONFIRMED in feed after refresh — SUCCESS!")
         sc(driver, "post_verified_after_refresh")
         return True
@@ -1094,11 +1409,19 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         return True
 
     # Recovery 3: Wait longer for proxy to deliver response, then refresh
+<<<<<<< HEAD
     log("  Waiting 20s more for proxy to deliver response...")
     time.sleep(20)
     driver.refresh()
     time.sleep(5)
     if verify_post_in_feed(driver, text, max_wait=15):
+=======
+    log("  Waiting 30s more for proxy to deliver response...")
+    time.sleep(30)
+    driver.refresh()
+    time.sleep(8 if proxy_mode else 5)
+    if verify_post_in_feed(driver, text, max_wait=30 if proxy_mode else 15):
+>>>>>>> 367dcec (improved for posting fix)
         log("  [ok] Post CONFIRMED in feed after extended wait — SUCCESS!")
         sc(driver, "post_verified_extended")
         return True
@@ -1121,7 +1444,12 @@ def main() -> int:
     state = load_daily_state()
 
     driver = build_driver()
+<<<<<<< HEAD
     driver.set_page_load_timeout(30)
+=======
+    # PROXY FIX: 30s page-load timeout is too tight through VLESS
+    driver.set_page_load_timeout(60 if is_proxy_active() else 30)
+>>>>>>> 367dcec (improved for posting fix)
     succeeded    = False
     published_at = ""
     target_group = None
@@ -1185,8 +1513,15 @@ def main() -> int:
 
     finally:
         if succeeded:
+<<<<<<< HEAD
             log("Holding 5s to finish network requests...")
             time.sleep(5)
+=======
+            # PROXY FIX: hold longer so trailing network requests complete
+            hold = 15 if is_proxy_active() else 5
+            log(f"Holding {hold}s to finish network requests...")
+            time.sleep(hold)
+>>>>>>> 367dcec (improved for posting fix)
         try:
             driver.quit()
         except Exception:
