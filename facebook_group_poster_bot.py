@@ -187,9 +187,9 @@ def build_driver() -> Driver:
     return Driver(
         browser="chrome",
         uc=True,
-        headless=True,
+        headless=False,
         user_data_dir=profile_path,
-        proxy=proxy,
+        # proxy=proxy,
     )
 
 
@@ -359,9 +359,13 @@ def has_unicode(text: str) -> bool:
 
 def inject_text(driver, element, text: str) -> None:
     """
-    Insert text into a contenteditable / Lexical editor.
-    Uses CDP Input.insertText for Unicode (Sinhala, Tamil, etc.)
-    and chunked ActionChains for plain ASCII.
+    Insert text into a contenteditable / Lexical editor preserving
+    all formatting exactly as it appears in the source .txt file.
+
+    Strategy (tried in order for ALL text — unicode and ASCII alike):
+      1. CDP Input.insertText  — most reliable, bypasses all event translation
+      2. _inject_via_clipboard — beforeinput / clipboard / execCommand cascade
+      3. ASCII fallback        — Shift+Enter for line breaks (only if both above fail)
     """
     driver.execute_script(
         "arguments[0].scrollIntoView({block:'center'});", element
@@ -375,77 +379,73 @@ def inject_text(driver, element, text: str) -> None:
         driver.execute_script("arguments[0].click();", element)
     time.sleep(0.5)
 
-    use_unicode_path = has_unicode(text)
+    # ── FIX 1 & 4: Try CDP first for ALL text (unicode AND ascii) ────────
+    # CDP Input.insertText inserts the exact string at the protocol level —
+    # no keyboard translation, no newline→Enter conversion, works for any script.
+    log("  Trying CDP injection first (works for all text types)...")
+    if _inject_via_cdp(driver, element, text):
+        cdp_result = driver.execute_script("return arguments[0].innerText;", element)
+        if cdp_result and len(cdp_result.strip()) >= len(text.strip()) * 0.8:
+            log(f"  [ok] CDP injection verified ({len(cdp_result.strip())} chars).")
+            return
+        log("  [cdp] Verification failed after CDP — falling back to clipboard.")
 
-    # ── Clear existing content ──────────────────────────────────────
-    # ActionChains Ctrl+A fails over proxy latency for non-ASCII editors
-    # and on headless Linux where the keyboard layout may not match.
-    # Use JS selectAll + delete for Unicode, ActionChains for ASCII.
-    if use_unicode_path:
-        log("  [unicode] Clearing via JS (skipping ActionChains Ctrl+A).")
-        driver.execute_script(
-            "arguments[0].focus();"
-            "document.execCommand('selectAll', false, null);"
-            "document.execCommand('delete', false, null);",
-            element,
-        )
-    else:
-        ActionChains(driver)\
-            .key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)\
-            .perform()
-        time.sleep(0.2)
-        ActionChains(driver).send_keys(Keys.DELETE).perform()
-    time.sleep(0.3)
-
-    # ── Insert text ─────────────────────────────────────────────────
-    if use_unicode_path:
-        # Try CDP first (bypasses keyboard translation entirely)
-        log("  [unicode] Non-ASCII text detected — trying CDP insertText.")
-        cdp_ok = _inject_via_cdp(driver, element, text)
-
-        if not cdp_ok:
-            # CDP failed (common with SeleniumBase UC mode which
-            # patches the DevTools pipe). Use JS execCommand fallback.
-            log("  [unicode] CDP unavailable — using JS execCommand insertText.")
-            driver.execute_script("arguments[0].focus();", element)
-            time.sleep(0.2)
-            driver.execute_script(
-                "document.execCommand('insertText', false, arguments[0]);",
-                text,
-            )
-    else:
-        # ASCII path — chunked ActionChains
-        chunk_size = 200
-        for i in range(0, len(text), chunk_size):
-            ActionChains(driver).send_keys(text[i:i + chunk_size]).perform()
-            time.sleep(0.15)
+    # ── Fallback: clipboard cascade (handles unicode reliably) ───────────
+    log("  Falling back to clipboard injection...")
+    _inject_via_clipboard(driver, element, text)
 
     time.sleep(0.5)
 
-    # Verify insertion succeeded
-    current = driver.execute_script(
-        "return arguments[0].textContent;", element
-    )
-    if not current or len(current.strip()) < 5:
-        log("  [fallback] Primary inject failed — using clipboard simulation.")
+    # ── FIX 2: Tighter verification — check both length AND newline count ─
+    current = driver.execute_script("return arguments[0].innerText;", element)
+    if current:
+        inserted_len      = len(current.strip())
+        expected_len      = len(text.strip())
+        expected_newlines = text.count('\n')
+        actual_newlines   = current.count('\n')
+
+        length_ok   = inserted_len >= expected_len * 0.8
+        newline_ok  = (expected_newlines <= 2) or \
+                      (actual_newlines >= expected_newlines * 0.5)
+
+        if not length_ok or not newline_ok:
+            log(f"  [warn] Formatting mismatch — "
+                f"chars {inserted_len}/{expected_len}, "
+                f"newlines {actual_newlines}/{expected_newlines}. Re-injecting.")
+            _inject_via_clipboard(driver, element, text)
+            time.sleep(0.5)
+        else:
+            log(f"  [ok] Description verified: {inserted_len}/{expected_len} chars, "
+                f"{actual_newlines}/{expected_newlines} newlines.")
+    else:
+        log("  [warn] Text box empty after inject — retrying.")
         _inject_via_clipboard(driver, element, text)
         time.sleep(0.5)
 
 
 def _inject_via_cdp(driver, element, text: str) -> bool:
     """
-    Primary Unicode injection using Chrome DevTools Protocol.
+    Primary injection using Chrome DevTools Protocol.
     Input.insertText inserts directly into the focused element —
-    no keyboard event translation, works for any script.
+    no keyboard event translation, works for any script (Sinhala, Tamil, ASCII).
+    Newlines in the string are preserved as-is.
 
     Returns True on success, False if CDP is unavailable (common with
     SeleniumBase UC mode which patches the DevTools pipe).
     """
+    # Clear the field first
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
     driver.execute_script("arguments[0].focus();", element)
     time.sleep(0.3)
 
     try:
-        chunks = _safe_unicode_chunks(text, max_chars=100)
+        chunks = _safe_unicode_chunks(text, max_chars=3500)
         for chunk in chunks:
             driver.execute_cdp_cmd('Input.insertText', {'text': chunk})
             time.sleep(0.1)
@@ -458,67 +458,127 @@ def _inject_via_cdp(driver, element, text: str) -> bool:
 
 def _inject_via_clipboard(driver, element, text: str) -> None:
     """
-    Secondary Unicode injection using a synthetic paste event.
-    Simulates Ctrl+V clipboard paste which Lexical handles natively
-    and correctly processes any Unicode including combining characters.
+    Fallback injection cascade for all text (Unicode + ASCII).
+    Tries three methods in order, stopping at the first that verifies.
+    Uses innerText (not textContent) to detect newline preservation.
     """
     driver.execute_script("arguments[0].focus();", element)
+    time.sleep(0.3)
+
+    # Clear first — JS selectAll + delete is reliable for all scripts
+    driver.execute_script(
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
     time.sleep(0.2)
 
-    # Dispatch a ClipboardEvent with the text as clipboard data.
-    # Lexical's paste handler processes this correctly for all scripts.
-    pasted = driver.execute_script(
+    # ── Method 1: beforeinput insertFromPaste (Lexical native handler) ──
+    # FIX 1: Use innerText (not textContent) so newlines are counted correctly.
+    injected = driver.execute_script(
         """
         var el   = arguments[0];
         var text = arguments[1];
+
         try {
             var dt = new DataTransfer();
             dt.setData('text/plain', text);
 
-            // Try paste event first (Lexical handles this natively)
-            var pasteEvt = new ClipboardEvent('paste', {
-                clipboardData : dt,
-                bubbles       : true,
-                cancelable    : true
-            });
-            el.dispatchEvent(pasteEvt);
-
-            if (el.textContent && el.textContent.length > 0) {
-                return true;
-            }
-
-            // Fallback: beforeinput with insertFromPaste type
-            var inputEvt = new InputEvent('beforeinput', {
+            var evt = new InputEvent('beforeinput', {
                 inputType    : 'insertFromPaste',
                 data         : text,
                 dataTransfer : dt,
                 bubbles      : true,
                 cancelable   : true
             });
-            el.dispatchEvent(inputEvt);
-            return el.textContent.length > 0;
+            el.dispatchEvent(evt);
+
+            return new Promise(function(resolve) {
+                setTimeout(function() {
+                    // FIX: use innerText so line breaks count toward length
+                    var content = el.innerText || '';
+                    resolve(content.trim().length > 5);
+                }, 400);
+            });
         } catch(e) {
-            return false;
+            return Promise.resolve(false);
         }
         """,
         element, text
     )
 
-    if not pasted:
-        # Last resort: execCommand (deprecated but still works in Chrome 2024+)
-        driver.execute_script(
-            "arguments[0].focus();"
-            "document.execCommand('selectAll', false, null);"
-            "document.execCommand('delete', false, null);"
-            "document.execCommand('insertText', false, arguments[1]);",
-            element, text,
-        )
-        log("  [clipboard] Used execCommand as final fallback.")
-    else:
-        log(f"  [clipboard] Inserted {len(text)} chars via clipboard simulation.")
+    if injected:
+        log(f"  [beforeinput] Inserted {len(text)} chars via beforeinput event.")
+        return
+
+    # ── Method 2: Clipboard API paste ──
+    log("  [beforeinput] Failed — trying clipboard API paste.")
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+
+    # FIX 1: Use innerText (not textContent) for newline-aware verification.
+    injected = driver.execute_script(
+        """
+        var el   = arguments[0];
+        var text = arguments[1];
+
+        function handler(e) {
+            e.clipboardData.setData('text/plain', text);
+            e.preventDefault();
+            document.removeEventListener('paste', handler, true);
+        }
+        document.addEventListener('paste', handler, true);
+
+        document.execCommand('paste');
+        return new Promise(function(resolve) {
+            setTimeout(function() {
+                // FIX: use innerText so line breaks count toward length
+                var content = el.innerText || '';
+                resolve(content.trim().length > 5);
+            }, 400);
+        });
+        """,
+        element, text
+    )
+
+    if injected:
+        log(f"  [clipboard] Inserted {len(text)} chars via clipboard paste.")
+        return
+
+    # ── Method 3: Line-by-line execCommand — preserves newlines as <br> ──
+    log("  [clipboard] Failed — falling back to line-by-line execCommand.")
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+
+    lines = text.split('\n')
+    for idx, line in enumerate(lines):
+        if line:
+            driver.execute_script(
+                "document.execCommand('insertText', false, arguments[0]);",
+                line,
+            )
+        # Insert line break between lines (not after last line)
+        if idx < len(lines) - 1:
+            driver.execute_script(
+                "document.execCommand('insertLineBreak');",
+            )
+        time.sleep(0.05)
+
+    log(f"  [execCommand] Inserted {len(text)} chars ({len(lines)} lines) "
+        f"via line-by-line execCommand.")
 
 
-def _safe_unicode_chunks(text: str, max_chars: int = 100) -> list:
+def _safe_unicode_chunks(text: str, max_chars: int = 3500) -> list:
     """
     Split text into chunks without breaking Unicode grapheme clusters.
     Splits preferably at newline or space boundaries to keep
@@ -545,6 +605,39 @@ def _safe_unicode_chunks(text: str, max_chars: int = 100) -> list:
         text = text[split_at:]
 
     return chunks
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Proxy-aware image compression
+# ─────────────────────────────────────────────────────────────────────
+def compress_image_for_proxy(path: str, max_size_kb: int = 300) -> str:
+    """
+    Compress a large image to a JPEG for faster upload through proxy.
+    Returns the path to the compressed file (original unchanged).
+    """
+    try:
+        from PIL import Image
+        orig = Image.open(path)
+        if orig.mode in ("RGBA", "P"):
+            orig = orig.convert("RGB")
+
+        # Progressive downscale — target ~300 KB JPEG
+        out_dir = os.path.join(os.path.dirname(path), "compressed")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, "compressed_poster.jpg")
+
+        for quality in (65, 50, 35):
+            orig.save(out_path, "JPEG", quality=quality, optimize=True)
+            if os.path.getsize(out_path) <= max_size_kb * 1024:
+                break
+
+        orig_size = os.path.getsize(path) / 1024
+        new_size  = os.path.getsize(out_path) / 1024
+        log(f"  [compress] {orig_size:.0f} KB → {new_size:.0f} KB")
+        return out_path
+    except Exception as e:
+        log(f"  [compress] Failed: {e} — using original.")
+        return path
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -583,7 +676,7 @@ def wait_for_post_button_enabled(driver, timeout: int = 90) -> bool:
     return False
 
 
-def wait_for_upload_spinner_gone(driver, timeout: int = 60) -> None:
+def wait_for_upload_spinner_gone(driver, timeout: int = 120) -> None:
     """Wait for Facebook's upload progress spinners to disappear."""
     spinner_xpaths = [
         "//div[@role='dialog']//div[@role='progressbar']",
@@ -609,7 +702,7 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
         # Watch for the 'Posting...' indicator to appear then disappear —
         # more reliable than watching the whole dialog since Facebook sometimes
         # keeps an outer dialog shell open while the post is processing.
-        WebDriverWait(driver,90).until(
+        WebDriverWait(driver, 90).until(
             EC.presence_of_element_located(
                 (By.XPATH, "//*[contains(text(),'Posting')]")
             )
@@ -696,9 +789,11 @@ def verify_post_in_feed(driver, text: str, max_wait: int = 30) -> bool:
 def post_to_current_group(driver, image_path: str, text: str) -> bool:
 
     proxy_mode   = is_proxy_active()
-    upload_wait  = 120 if proxy_mode else 60   # aria-disabled poll timeout
-    submit_wait  = 180 if proxy_mode else 90   # dialog-close timeout
-    extra_buffer = 4   if proxy_mode else 1    # settle buffer after upload
+    # VLESS proxy adds 3-5x latency. 3 MB PNG upload can take 3-5 min.
+    # Post button stays aria-disabled until Facebook confirms upload.
+    upload_wait  = 300 if proxy_mode else 60   # 5 min for proxy upload
+    submit_wait  = 300 if proxy_mode else 90   # 5 min for proxy submit
+    extra_buffer = 6   if proxy_mode else 1
 
     if proxy_mode:
         log("  [proxy] Proxy mode active — using extended timeouts.")
@@ -801,6 +896,10 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     time.sleep(0.5)
 
     abs_path = os.path.abspath(image_path)
+    # Compress large images in proxy mode — 3 MB PNG takes minutes through VLESS
+    if proxy_mode and os.path.getsize(abs_path) > 500_000:
+        log("  [proxy] Compressing image for faster upload...")
+        abs_path = compress_image_for_proxy(abs_path)
     file_input.send_keys(abs_path)
     log(f"  [ok] File sent silently: {os.path.basename(abs_path)}")
 
@@ -821,7 +920,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         sc(driver, "photo_preview_timeout")
 
     # Wait for spinners to clear (server-side upload done)
-    wait_for_upload_spinner_gone(driver, timeout=60)
+    wait_for_upload_spinner_gone(driver, timeout=180 if proxy_mode else 60)
 
     # ── KEY FIX: Poll aria-disabled until Post button is truly enabled ─
     # EC.element_to_be_clickable ignores aria-disabled='true' — we must
@@ -880,7 +979,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
                 continue
 
             inject_text(driver, tb, text)
-            actual = driver.execute_script("return arguments[0].textContent;", tb)
+            actual = driver.execute_script("return arguments[0].innerText;", tb)
             if actual and len(actual.strip()) > 5:
                 log(f"  [ok] Description inserted ({len(text)} chars). "
                     f"Verified: '{actual[:40]}...'")
@@ -901,11 +1000,15 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     # ── Step 4: Submit ────────────────────────────────────────────────
     log("  [4/4] Submitting post...")
 
-    # Re-confirm button is still enabled right before clicking
-    if not wait_for_post_button_enabled(driver, timeout=30):
-        log("  [FAIL] Post button disabled again before click.")
-        sc(driver, "post_btn_redisabled")
-        return False
+    # Through proxy, button can flicker disabled briefly after text inject.
+    # Don't hard-fail — just wait and retry.
+    if not wait_for_post_button_enabled(driver, timeout=60):
+        log("  [WARN] Post button still disabled — waiting extra 30s...")
+        time.sleep(30)
+        if not wait_for_post_button_enabled(driver, timeout=30):
+            log("  [FAIL] Post button disabled again before click.")
+            sc(driver, "post_btn_redisabled")
+            return False
 
     post_btn_xpaths = [
         "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
@@ -920,7 +1023,13 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
             btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, xp))
             )
-            if btn.get_attribute("aria-disabled") != "true":
+            # Check both HTML attr AND JS property — proxy can cause lag
+            disabled_attr = btn.get_attribute("aria-disabled")
+            disabled_js = driver.execute_script(
+                "return arguments[0].getAttribute('aria-disabled')"
+                "    || arguments[0].disabled;", btn
+            )
+            if disabled_attr != "true" and not disabled_js:
                 post_btn = btn
                 break
         except TimeoutException:
