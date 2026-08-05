@@ -417,25 +417,253 @@ def build_driver(cfg: ListingConfig):
 
 
 def set_text_via_js(driver: webdriver.Chrome, element, text: str) -> None:
-    """Set a textarea/input's value via JS, using the native value setter so
-    React (which controls Facebook's form) picks up the change. This bypasses
-    ChromeDriver's send_keys(), which cannot transmit characters outside the
-    Basic Multilingual Plane (most emoji) and throws
-    'unknown error: ChromeDriver only supports characters in the BMP'."""
-    tag = element.tag_name.lower()
-    setter_class = "HTMLTextAreaElement" if tag == "textarea" else "HTMLInputElement"
+    """
+    Insert text into a contenteditable / Lexical editor preserving
+    all formatting exactly as it appears in the source .txt file.
+
+    Strategy (tried in order for ALL text — unicode and ASCII alike):
+      1. CDP Input.insertText  — most reliable, bypasses all event translation
+      2. _inject_via_clipboard — beforeinput / clipboard / execCommand cascade
+      3. ASCII fallback        — Shift+Enter for line breaks (only if both above fail)
+    """
     driver.execute_script(
-        f"""
-        var el = arguments[0];
-        var value = arguments[1];
-        var setter = Object.getOwnPropertyDescriptor(window.{setter_class}.prototype, 'value').set;
-        setter.call(el, value);
-        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        """,
-        element,
-        text,
+        "arguments[0].scrollIntoView({block:'center'});", element
     )
+    time.sleep(0.3)
+
+    # Focus the element
+    try:
+        element.click()
+    except ElementClickInterceptedException:
+        driver.execute_script("arguments[0].click();", element)
+    time.sleep(0.5)
+
+    # ── FIX 1 & 4: Try CDP first for ALL text (unicode AND ascii) ────────
+    # CDP Input.insertText inserts the exact string at the protocol level —
+    # no keyboard translation, no newline→Enter conversion, works for any script.
+    log("  Trying CDP injection first (works for all text types)...")
+    if _inject_via_cdp(driver, element, text):
+        cdp_result = driver.execute_script("return arguments[0].innerText;", element)
+        if cdp_result and len(cdp_result.strip()) >= len(text.strip()) * 0.8:
+            log(f"  [ok] CDP injection verified ({len(cdp_result.strip())} chars).")
+            return
+        log("  [cdp] Verification failed after CDP — falling back to clipboard.")
+
+    # ── Fallback: clipboard cascade (handles unicode reliably) ───────────
+    log("  Falling back to clipboard injection...")
+    _inject_via_clipboard(driver, element, text)
+
+    time.sleep(0.5)
+
+    # ── FIX 2: Tighter verification — check both length AND newline count ─
+    current = driver.execute_script("return arguments[0].innerText;", element)
+    if current:
+        inserted_len      = len(current.strip())
+        expected_len      = len(text.strip())
+        expected_newlines = text.count('\n')
+        actual_newlines   = current.count('\n')
+
+        length_ok   = inserted_len >= expected_len * 0.8
+        newline_ok  = (expected_newlines <= 2) or \
+                      (actual_newlines >= expected_newlines * 0.5)
+
+        if not length_ok or not newline_ok:
+            log(f"  [warn] Formatting mismatch — "
+                f"chars {inserted_len}/{expected_len}, "
+                f"newlines {actual_newlines}/{expected_newlines}. Re-injecting.")
+            _inject_via_clipboard(driver, element, text)
+            time.sleep(0.5)
+        else:
+            log(f"  [ok] Description verified: {inserted_len}/{expected_len} chars, "
+                f"{actual_newlines}/{expected_newlines} newlines.")
+    else:
+        log("  [warn] Text box empty after inject — retrying.")
+        _inject_via_clipboard(driver, element, text)
+        time.sleep(0.5)
+
+
+def _inject_via_cdp(driver, element, text: str) -> bool:
+    """
+    Primary injection using Chrome DevTools Protocol.
+    Input.insertText inserts directly into the focused element —
+    no keyboard event translation, works for any script (Sinhala, Tamil, ASCII).
+    Newlines in the string are preserved as-is.
+
+    Returns True on success, False if CDP is unavailable (common with
+    SeleniumBase UC mode which patches the DevTools pipe).
+    """
+    # Clear the field first
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+    driver.execute_script("arguments[0].focus();", element)
+    time.sleep(0.3)
+
+    try:
+        chunks = _safe_unicode_chunks(text, max_chars=3500)
+        for chunk in chunks:
+            driver.execute_cdp_cmd('Input.insertText', {'text': chunk})
+            time.sleep(0.1)
+        log(f"  [cdp] Inserted {len(text)} chars via CDP in {len(chunks)} chunk(s).")
+        return True
+    except Exception as e:
+        log(f"  [cdp] CDP insertText failed: {e}")
+        return False
+
+
+def _inject_via_clipboard(driver, element, text: str) -> None:
+    """
+    Fallback injection cascade for all text (Unicode + ASCII).
+    Tries three methods in order, stopping at the first that verifies.
+    Uses innerText (not textContent) to detect newline preservation.
+    """
+    driver.execute_script("arguments[0].focus();", element)
+    time.sleep(0.3)
+
+    # Clear first — JS selectAll + delete is reliable for all scripts
+    driver.execute_script(
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+
+    # ── Method 1: beforeinput insertFromPaste (Lexical native handler) ──
+    # FIX 1: Use innerText (not textContent) so newlines are counted correctly.
+    injected = driver.execute_script(
+        """
+        var el   = arguments[0];
+        var text = arguments[1];
+
+        try {
+            var dt = new DataTransfer();
+            dt.setData('text/plain', text);
+
+            var evt = new InputEvent('beforeinput', {
+                inputType    : 'insertFromPaste',
+                data         : text,
+                dataTransfer : dt,
+                bubbles      : true,
+                cancelable   : true
+            });
+            el.dispatchEvent(evt);
+
+            return new Promise(function(resolve) {
+                setTimeout(function() {
+                    // FIX: use innerText so line breaks count toward length
+                    var content = el.innerText || '';
+                    resolve(content.trim().length > 5);
+                }, 400);
+            });
+        } catch(e) {
+            return Promise.resolve(false);
+        }
+        """,
+        element, text
+    )
+
+    if injected:
+        log(f"  [beforeinput] Inserted {len(text)} chars via beforeinput event.")
+        return
+
+    # ── Method 2: Clipboard API paste ──
+    log("  [beforeinput] Failed — trying clipboard API paste.")
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+
+    # FIX 1: Use innerText (not textContent) for newline-aware verification.
+    injected = driver.execute_script(
+        """
+        var el   = arguments[0];
+        var text = arguments[1];
+
+        function handler(e) {
+            e.clipboardData.setData('text/plain', text);
+            e.preventDefault();
+            document.removeEventListener('paste', handler, true);
+        }
+        document.addEventListener('paste', handler, true);
+
+        document.execCommand('paste');
+        return new Promise(function(resolve) {
+            setTimeout(function() {
+                // FIX: use innerText so line breaks count toward length
+                var content = el.innerText || '';
+                resolve(content.trim().length > 5);
+            }, 400);
+        });
+        """,
+        element, text
+    )
+
+    if injected:
+        log(f"  [clipboard] Inserted {len(text)} chars via clipboard paste.")
+        return
+
+    # ── Method 3: Line-by-line execCommand — preserves newlines as <br> ──
+    log("  [clipboard] Failed — falling back to line-by-line execCommand.")
+    driver.execute_script(
+        "arguments[0].focus();"
+        "document.execCommand('selectAll', false, null);"
+        "document.execCommand('delete', false, null);",
+        element,
+    )
+    time.sleep(0.2)
+
+    lines = text.split('\n')
+    for idx, line in enumerate(lines):
+        if line:
+            driver.execute_script(
+                "document.execCommand('insertText', false, arguments[0]);",
+                line,
+            )
+        # Insert line break between lines (not after last line)
+        if idx < len(lines) - 1:
+            driver.execute_script(
+                "document.execCommand('insertLineBreak');",
+            )
+        time.sleep(0.05)
+
+    log(f"  [execCommand] Inserted {len(text)} chars ({len(lines)} lines) "
+        f"via line-by-line execCommand.")
+
+
+def _safe_unicode_chunks(text: str, max_chars: int = 3500) -> list:
+    """
+    Split text into chunks without breaking Unicode grapheme clusters.
+    Splits preferably at newline or space boundaries to keep
+    combining character sequences (consonant + vowel sign) intact.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    while text:
+        if len(text) <= max_chars:
+            chunks.append(text)
+            break
+
+        # Try to split at a newline or space within the limit
+        split_at = max_chars
+        for sep in ('\n', ' '):
+            pos = text.rfind(sep, 0, max_chars)
+            if pos > max_chars // 2:   # only split here if not too early
+                split_at = pos + 1
+                break
+
+        chunks.append(text[:split_at])
+        text = text[split_at:]
+
+    return chunks
 
 
 def safe_fill(driver: webdriver.Chrome, wait: WebDriverWait, xpath: str, value: str, field_name: str) -> bool:
