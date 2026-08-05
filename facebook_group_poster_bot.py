@@ -189,7 +189,7 @@ def build_driver() -> Driver:
         uc=True,
         headless=True,
         user_data_dir=profile_path,
-        # proxy=proxy,
+        proxy=proxy,
     )
 
 
