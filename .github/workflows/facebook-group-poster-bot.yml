@@ -173,49 +173,49 @@ jobs:
         run: python3 facebook_group_poster_bot.py
 
       # ── 11. Alert + rebuild profile on failure ────────────────────
-      - name: Alert Telegram — rebuilding profile
-        if: steps.bot.outcome != 'success'
-        run: |
-          curl -s -X POST \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d "parse_mode=Markdown" \
-            -d "text=⚠️ *Group Poster Bot:* First attempt failed — rebuilding Chrome profile…"
+      # - name: Alert Telegram — rebuilding profile
+      #   if: steps.bot.outcome != 'success'
+      #   run: |
+      #     curl -s -X POST \
+      #       "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+      #       -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+      #       -d "parse_mode=Markdown" \
+      #       -d "text=⚠️ *Group Poster Bot:* First attempt failed — rebuilding Chrome profile…"
 
-      - name: Rebuild Facebook Chrome profile
-        if: steps.bot.outcome != 'success'
-        env:
-          FB_EMAIL:    ${{ secrets.FB_EMAIL }}
-          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
-        run: |
-          rm -f profiles.zip
-          python3 facebook_profile_initializer.py
-          cd profiles/facebook_stable_session
-          rm -rf "Default/Code Cache" "Default/Cache" \
-                 optimization_guide_model_store component_crx_cache \
-                 WasmTtsEngine || true
-          cd ../..
-          zip -r profiles.zip profiles/facebook_stable_session/ \
-            -x "*/Singleton*" "*/LOCK" "*/.com.google.Chrome.*" "*cache*"
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add profiles.zip
-          git commit -m "chore: auto-rebuilt Facebook profile seed [skip ci]" \
-            || echo "Nothing to commit."
-          git pull --rebase origin ${{ github.ref_name }} || true
-          git push
+      # - name: Rebuild Facebook Chrome profile
+      #   if: steps.bot.outcome != 'success'
+      #   env:
+      #     FB_EMAIL:    ${{ secrets.FB_EMAIL }}
+      #     FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+      #   run: |
+      #     rm -f profiles.zip
+      #     python3 facebook_profile_initializer.py
+      #     cd profiles/facebook_stable_session
+      #     rm -rf "Default/Code Cache" "Default/Cache" \
+      #            optimization_guide_model_store component_crx_cache \
+      #            WasmTtsEngine || true
+      #     cd ../..
+      #     zip -r profiles.zip profiles/facebook_stable_session/ \
+      #       -x "*/Singleton*" "*/LOCK" "*/.com.google.Chrome.*" "*cache*"
+      #     git config user.name  "github-actions[bot]"
+      #     git config user.email "github-actions[bot]@users.noreply.github.com"
+      #     git add profiles.zip
+      #     git commit -m "chore: auto-rebuilt Facebook profile seed [skip ci]" \
+      #       || echo "Nothing to commit."
+      #     git pull --rebase origin ${{ github.ref_name }} || true
+      #     git push
 
-      # ── 12. SECOND ATTEMPT (fresh profile) ───────────────────────
-      - name: Retry Group Poster Bot (fresh profile)
-        id: bot_retry
-        if: steps.bot.outcome != 'success'
-        continue-on-error: true
-        env:
-          FB_EMAIL:    ${{ secrets.FB_EMAIL }}
-          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
-          PROXY_HOST:  "127.0.0.1"
-          PROXY_PORT:  "10808"
-        run: python3 facebook_group_poster_bot.py
+      # # ── 12. SECOND ATTEMPT (fresh profile) ───────────────────────
+      # - name: Retry Group Poster Bot (fresh profile)
+      #   id: bot_retry
+      #   if: steps.bot.outcome != 'success'
+      #   continue-on-error: true
+      #   env:
+      #     FB_EMAIL:    ${{ secrets.FB_EMAIL }}
+      #     FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
+      #     PROXY_HOST:  "127.0.0.1"
+      #     PROXY_PORT:  "10808"
+      #   run: python3 facebook_group_poster_bot.py
 
       # ── 13. Save updated group tracker state ─────────────────────
       - name: Save group tracker state
