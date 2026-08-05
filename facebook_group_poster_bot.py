@@ -723,7 +723,7 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
     try:
         WebDriverWait(driver, 60).until(
             EC.presence_of_element_located(
-                (By.XPATH, "//div[@role='dialog']//*[contains(text(),'Posting')]")
+                (By.XPATH, "//*[text()='Posting']")
             )
         )
         log("  [ok] 'Posting...' indicator seen inside dialog — upload in progress.")
@@ -733,7 +733,7 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
     # Wait for the dialog to disappear
     try:
         WebDriverWait(driver, timeout).until(
-            EC.invisibility_of_element_located((By.XPATH, "//div[@role='dialog']"))
+            EC.invisibility_of_element_located((By.XPATH, "//*[text()='Posting']"))
         )
         elapsed = time.time() - start
         log(f"  [ok] Dialog closed in {elapsed:.1f}s — post submitted!")
