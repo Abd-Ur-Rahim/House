@@ -187,9 +187,9 @@ def build_driver() -> Driver:
     return Driver(
         browser="chrome",
         uc=True,
-        headless=False,
+        headless=True,
         user_data_dir=profile_path,
-        # proxy=proxy,
+        proxy=proxy,
     )
 
 
@@ -814,8 +814,8 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     proxy_mode   = is_proxy_active()
     # VLESS proxy adds 3-5x latency. 3 MB PNG upload can take 3-5 min.
     # Post button stays aria-disabled until Facebook confirms upload.
-    upload_wait  = 300 if proxy_mode else 60   # 5 min for proxy upload
-    submit_wait  = 300 if proxy_mode else 90   # 5 min for proxy submit
+    upload_wait  = 120 if proxy_mode else 60   # 5 min for proxy upload
+    submit_wait  = 90 if proxy_mode else 90   # 5 min for proxy submit
     extra_buffer = 6   if proxy_mode else 1
 
     if proxy_mode:
@@ -943,7 +943,7 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
         sc(driver, "photo_preview_timeout")
 
     # Wait for spinners to clear (server-side upload done)
-    wait_for_upload_spinner_gone(driver, timeout=180 if proxy_mode else 60)
+    # wait_for_upload_spinner_gone(driver, timeout=180 if proxy_mode else 60)
 
     # ── KEY FIX: Poll aria-disabled until Post button is truly enabled ─
     # EC.element_to_be_clickable ignores aria-disabled='true' — we must
