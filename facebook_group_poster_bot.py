@@ -691,7 +691,6 @@ def wait_for_upload_spinner_gone(driver, timeout: int = 120) -> None:
         time.sleep(1)
     log("  [WARN] Spinner still visible after timeout — continuing anyway.")
 
-
 def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool, float]":
     """
     Wait for the post dialog to close naturally after clicking Post.
@@ -699,44 +698,42 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
     """
     start = time.time()
 
-    # Verify the dialog actually exists right now — if not, something is wrong
+    # 1. Verify the dialog actually exists right now — if not, something is wrong
     dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
     if not dialogs:
         log("  [WARN] No dialog found at start of wait — dialog may have closed already.")
         return False, 0.0
 
-    # Minimum wait — Facebook needs time to process the click and start upload.
+    # 2. Minimum wait — Facebook needs time to process the click and start upload.
     # Do NOT check for dialog close during this period.
     min_wait = 8 if is_proxy_active() else 4
     log(f"  Waiting {min_wait}s minimum for Facebook to process the post...")
     time.sleep(min_wait)
 
-    # Now check if dialog is still there
+    # 3. Now check if dialog is still there
     dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
     if not dialogs:
         elapsed = time.time() - start
         log(f"  [ok] Dialog gone after {elapsed:.1f}s minimum wait — post likely submitted.")
         return True, elapsed
 
-    # Watch for 'Posting...' indicator SCOPED TO THE DIALOG only.
-    # Without scoping, feed text or other page elements can false-match.
+    # 4. STEP 1: Wait briefly for the 'Posting' text to APPEAR in the DOM.
+    # If it loads incredibly fast and we miss it, we catch the TimeoutException and move on.
     try:
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//*[text()='Posting']")
-            )
+        WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located((By.XPATH, "//*[text()='Posting']"))
         )
-        log("  [ok] 'Posting...' indicator seen inside dialog — upload in progress.")
+        log("  [ok] 'Posting' status indicator detected on the page.")
     except TimeoutException:
-        log("  [warn] No 'Posting...' indicator found in dialog — continuing to wait for close.")
+        log("  [warn] 'Posting' text not seen yet — proceeding to check for disappearance.")
 
-    # Wait for the dialog to disappear
+    # 5. STEP 2: Now wait for the 'Posting' text to DISAPPEAR (upload complete).
     try:
         WebDriverWait(driver, timeout).until(
             EC.invisibility_of_element_located((By.XPATH, "//*[text()='Posting']"))
         )
         elapsed = time.time() - start
-        log(f"  [ok] Dialog closed in {elapsed:.1f}s — post submitted!")
+        log(f"  [ok] 'Posting' indicator has disappeared in {elapsed:.1f}s — post submitted!")
         return True, elapsed
     except TimeoutException:
         elapsed = time.time() - start
