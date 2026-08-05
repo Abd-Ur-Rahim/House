@@ -720,15 +720,21 @@ def wait_for_dialog_close_or_timeout(driver, timeout: int = 120) -> "tuple[bool,
 
     # Watch for 'Posting...' indicator SCOPED TO THE DIALOG only.
     # Without scoping, feed text or other page elements can false-match.
-    try:
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//div[@role='dialog']//*[contains(text(),'Posting')]")
-            )
-        )
-        log("  [ok] 'Posting...' indicator seen inside dialog — upload in progress.")
-    except TimeoutException:
-        log("  [warn] No 'Posting...' indicator found in dialog — continuing to wait for close.")
+    deadline_posting = time.time() + 60
+    posting_seen = False
+    while time.time() < deadline_posting:
+        if not driver.find_elements(By.XPATH, "//div[@role='dialog']"):
+            log("  [ok] Dialog closed while waiting for Posting indicator.")
+            return True, time.time() - start
+        if driver.find_elements(
+            By.XPATH, "//div[@role='dialog']//*[contains(text(),'Posting')]"
+        ):
+            log("  [ok] 'Posting...' indicator seen — upload in progress.")
+            posting_seen = True
+            break
+        time.sleep(2)
+    if not posting_seen:
+        log("  [warn] No 'Posting...' indicator — continuing to wait for close.")
 
     # Wait for the dialog to disappear
     try:
@@ -805,7 +811,57 @@ def verify_post_in_feed(driver, text: str, max_wait: int = 30) -> bool:
         time.sleep(3)
     return False
 
+def wait_for_image_fully_uploaded(driver, timeout: int = 300) -> bool:
+    """
+    Wait until grey placeholder disappears and real CDN image appears.
+    Grey box with filename = local only. CDN image = safe to post.
+    """
+    log("  Waiting for image to upload from grey placeholder to CDN...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        elapsed = timeout - (deadline - time.time())
 
+        # Grey placeholder still visible (filename text = not on CDN yet)
+        grey = driver.find_elements(
+            By.XPATH,
+            "//div[@role='dialog']//*[contains(text(),'.png')"
+            "                      or contains(text(),'.jpg')"
+            "                      or contains(text(),'.jpeg')]"
+        )
+        if grey:
+            log(f"  [{elapsed:.0f}s] Grey placeholder still visible — still uploading...")
+            time.sleep(5)
+            continue
+
+        # Real CDN image appeared
+        cdn_image = driver.find_elements(
+            By.XPATH,
+            "//div[@role='dialog']//img[contains(@src,'scontent')"
+            "                        or contains(@src,'fbcdn')"
+            "                        or contains(@src,'fbsbx')]"
+        )
+        if cdn_image:
+            log("  [ok] CDN image detected — upload complete!")
+            return True
+
+        # Post button enabled = Facebook confirmed upload on their end
+        for xp in [
+            "//div[@role='dialog']//div[@aria-label='Post'][@role='button']",
+            "//div[@role='dialog']//div[@role='button'][.//span[normalize-space()='Post']]",
+        ]:
+            for btn in driver.find_elements(By.XPATH, xp):
+                try:
+                    if btn.get_attribute("aria-disabled") != "true" and btn.is_displayed():
+                        log("  [ok] Post button enabled — CDN upload confirmed!")
+                        return True
+                except StaleElementReferenceException:
+                    continue
+
+        log(f"  [{elapsed:.0f}s] Waiting for CDN upload...")
+        time.sleep(5)
+
+    log("  [FAIL] Image never left grey placeholder within timeout.")
+    return False
 # ─────────────────────────────────────────────────────────────────────
 # Post composer
 # ─────────────────────────────────────────────────────────────────────
@@ -926,36 +982,20 @@ def post_to_current_group(driver, image_path: str, text: str) -> bool:
     file_input.send_keys(abs_path)
     log(f"  [ok] File sent silently: {os.path.basename(abs_path)}")
 
-    # Wait for browser-side preview (confirms file was accepted locally)
-    log("  Waiting for photo preview...")
-    try:
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((
-                By.XPATH,
-                "//div[@role='dialog']//img[contains(@src,'blob:')"
-                "    or contains(@src,'scontent')"
-                "    or contains(@src,'fbcdn')]"
-            ))
-        )
-        log("  [ok] Photo preview visible.")
-    except TimeoutException:
-        log("  [WARN] Preview not seen in 30s — continuing.")
-        sc(driver, "photo_preview_timeout")
-
-    # Wait for spinners to clear (server-side upload done)
-    # wait_for_upload_spinner_gone(driver, timeout=180 if proxy_mode else 60)
-
-    # ── KEY FIX: Poll aria-disabled until Post button is truly enabled ─
-    # EC.element_to_be_clickable ignores aria-disabled='true' — we must
-    # check it manually. Facebook keeps the button disabled until the
-    # server confirms the photo upload, which is slow through a proxy.
-    if not wait_for_post_button_enabled(driver, timeout=upload_wait):
-        log("  [FAIL] Post button never became enabled — upload may have failed.")
-        sc(driver, "post_btn_disabled_timeout")
+    # Wait for grey placeholder to become real CDN image
+    if not wait_for_image_fully_uploaded(driver, timeout=upload_wait):
+        log("  [FAIL] Image stuck as grey placeholder — upload stalled.")
+        sc(driver, "image_upload_stalled")
         return False
 
-    # Extra settle time — proxy connections can cause button-state flicker
+    # Extra settle after CDN confirmation
     time.sleep(extra_buffer)
+
+    # Final check post button is truly enabled before proceeding
+    if not wait_for_post_button_enabled(driver, timeout=30):
+        log("  [FAIL] Post button still disabled after CDN upload confirmed.")
+        sc(driver, "post_btn_disabled_after_cdn")
+        return False
 
     # ── Step 3: Insert description ────────────────────────────────────
     log("  [3/4] Inserting description into post editor...")
