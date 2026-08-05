@@ -3,3 +3,4 @@ seleniumbase
 webdriver-manager
 pytz
 requests
+Pillow
